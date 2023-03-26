@@ -10,19 +10,10 @@ help: ## Get help for Makefile
 install: ## Install requirements locally
 	sudo apt-get install -y dnsutils bash curl jq apt-utils
 
+test: ## Run tests
+	@echo "No tests yet"
+	
 run: ## Run dns-bash locally
 	chmod +x dns-bash.sh && bash dns-bash.sh
-	
-docker-build: ## Build docker image
-	docker build --no-cache -t $(NAME) .
 
-docker-run: ## Run discord bot inside docker container
-	docker run --privileged --network=host --env-file .env --name dns-bash $(NAME)
-
-docker-sh: ## Shell into docker container
-	docker run --network=host --privileged -it $(NAME) sh
-
-docker-remove: ## Remove docker container
-	docker container rm $(NAME)
-
-.PHONY: help docker-build docker-run docker-sh docker-remove run install
+.PHONY: help run install
