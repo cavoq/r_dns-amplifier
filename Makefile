@@ -1,5 +1,5 @@
 NAME=dns-bash
-VERSION=1.0.0
+VERSION=1.0
 
 help: ## Get help for Makefile
 	@echo "\n#### $(NAME) v$(VERSION) ####\n"
