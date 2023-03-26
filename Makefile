@@ -8,7 +8,7 @@ help: ## Get help for Makefile
 	@echo "\n"
 
 install: ## Install requirements locally
-	sudo apt-get install -y dnsutils bash curl jq
+	sudo apt-get install -y dnsutils bash curl jq apt-utils
 
 run: ## Run dns-bash locally
 	chmod +x dns-bash.sh && bash dns-bash.sh
