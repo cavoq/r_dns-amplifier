@@ -15,4 +15,5 @@ byteorder = "1.4.3"
 clap = { version = "4.2.1", features = ["derive"] }
 trust-dns-resolver = "0.22.0"
 trust-dns-proto = "0.22.0"
+dotenv = "0.15.0"
 

