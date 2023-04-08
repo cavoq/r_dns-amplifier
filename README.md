@@ -41,4 +41,9 @@ You can also run this script by building it directly after cloning:
 cargo build --release
 ```
 
-![Screenshot from 2023-04-08 14-14-40](https://user-images.githubusercontent.com/61215846/230720615-7ca0c1fd-c641-4129-a8c4-1af913edab3e.png)
+*see help:*
+
+![Screenshot from 2023-04-08 17-18-15](https://user-images.githubusercontent.com/61215846/230729166-514eead7-081a-4b89-b79a-323e5af2a668.png)
+
+
+
