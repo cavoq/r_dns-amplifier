@@ -1,5 +1,8 @@
 # r_dns-amplifier
 
+![license](https://img.shields.io/badge/license-MIT-brightgreen.svg)
+![version](https://img.shields.io/badge/version-0.1.0-lightgrey.svg)
+
 Rust script which performs dns-amplification attacks.
 
 ## Disclaimer
