@@ -15,24 +15,30 @@ The script requires Rust to be installed.
 
 ## Install
 
-You can install the script using the cargo package manager by running:
+You can install the script globally using the cargo package manager by running:
 
 ```
 cargo install --git https://github.com/Dav3o/r_dns-amplifier.git --branch master
 ```
 
-## Setup
+Because this script uses raw sockets it requires root privileges, you need to set an alias and run the script like this if you don't want
+to specify the full path:
 
-Because this script uses raw sockets it requires root privileges, you can set the path of your cargo installation like this:
-
 ```
-sudo sh -c "echo 'export PATH=\$PATH:$(dirname $(which amplifier))' >> /root/.bashrc"
+echo "alias sudo-rdns='sudo env \"PATH=$PATH\" r_dns-amplifier'" >> ~/.bashrc && source ~/.bashrc
 ```
 
-You might need to start a new shell or run
-```
-source /root/.bashrc
-```
+**Note that insteas of *r_dns-amplifier* you call *sudo-rdns***
 ## Usage
+
+Example usage with global install:
+```
+sudo-rdns 192.168.2.1 80 -r ANY -d google.com
+```
+
+You can also run this script by building it directly after cloning:
+```
+cargo build --release
+```
 
 ![Screenshot from 2023-04-08 14-14-40](https://user-images.githubusercontent.com/61215846/230720615-7ca0c1fd-c641-4129-a8c4-1af913edab3e.png)
