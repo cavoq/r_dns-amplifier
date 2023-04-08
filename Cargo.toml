@@ -5,23 +5,13 @@ authors = ["David Stromberger <Davidstromberger99@gmx.de>"]
 edition = "2021"
 
 [[bin]]
-name = "amplifier"
+name = "r_dns-amplifier"
 path = "src/amplifier.rs"
 
 [dependencies]
 reqwest = { version = "0.11.6", features = ["blocking"] }
 tokio = { version = "1.27.0", features = ["full"] }
-byteorder = "1.4.3"
 clap = { version = "4.2.1", features = ["derive"] }
-trust-dns-resolver = "0.22.0"
-trust-dns-proto = "0.22.0"
-dotenv = "0.15.0"
 rand = "0.8.5"
-raw-socket = "0.0.2"
-trust-dns = "0.22.0"
-packet_rs = "0.2.0"
-bytes = "1.4.0"
 pnet = "0.33.0"
 libc = "0.2.141"
-nix = "0.26.2"
-

