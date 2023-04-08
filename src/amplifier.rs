@@ -97,9 +97,6 @@ fn build_dns_query(domain: &str, record_type: RecordType) -> Vec<u8> {
     header[2] = 0x01; // Standard query
     header[5] = 0x01; // Recursion desired
 
-    // Question count (one question)
-    header[4] = 0x01;
-
     let mut question = Vec::new();
 
     // Domain name
@@ -109,7 +106,8 @@ fn build_dns_query(domain: &str, record_type: RecordType) -> Vec<u8> {
         question.push(0); // End of domain name
     }
 
-    question.extend(record_type.to_string().as_bytes()); // Record type (big-endian)
+    let record_type_u16: u16 = record_type.into();
+    question.extend(&record_type_u16.to_be_bytes()); // Record type (big-endian)
     question.extend(&0x0001u16.to_be_bytes()); // Record class (big-endian)
 
     // Combine header and question to form the complete DNS query
@@ -117,7 +115,6 @@ fn build_dns_query(domain: &str, record_type: RecordType) -> Vec<u8> {
     dns_query_buffer.extend(&header);
     dns_query_buffer.extend(&question);
 
-    // Return the DNS query buffer
     dns_query_buffer
 }
 
@@ -129,7 +126,7 @@ fn build_udp_packet(
     payload: &[u8],
 ) -> Vec<u8> {
     let mut udp_packet = MutableUdpPacket::owned(vec![0u8; 8 + payload.len()]).unwrap();
-
+    
     udp_packet.set_source(src_port);
     udp_packet.set_destination(dst_port);
     udp_packet.set_payload(payload);
@@ -307,10 +304,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let source_ip = source_ip.to_string();
         let domain = domain.clone();
 
-        let handle =
-            tokio::spawn(
-                async move { amplify(&dns_servers, &domain, &source_ip, source_port, record_type).await },
-            );
+        let handle = tokio::spawn(async move {
+            amplify(&dns_servers, &domain, &source_ip, source_port, record_type).await
+        });
 
         handles.push(handle);
     }
