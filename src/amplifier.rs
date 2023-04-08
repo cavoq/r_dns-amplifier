@@ -6,7 +6,7 @@
 
 use clap::{arg, command, Parser};
 use pnet::packet::ipv4::MutableIpv4Packet;
-use pnet::packet::udp::MutableUdpPacket;
+use pnet::packet::udp::{MutableUdpPacket, self};
 use pnet::packet::Packet;
 use reqwest;
 use std::fs::File;
@@ -69,17 +69,18 @@ async fn send_dns_query(
     let dns_query_payload = build_dns_query(domain, record_type);
     let udp_payload = build_udp_packet(source_port, 53, source_ip, dst_ip, &dns_query_payload);
     let ip_payload = build_ip_packet(source_ip, dst_ip, &udp_payload);
+    
+    println!("ip_payload: {:?}", ip_payload);
 
     match send_raw_packet(dst_ip, &ip_payload) {
-        Ok(_) => 
-            println!(
-                "{} {} {} {} {}",
-                colorize("Sent", "green"),
-                colorize("DNS", "yellow"),
-                colorize("query", "yellow"),
-                colorize("to", "green"),
-                colorize(&dst_ip.to_string(), "blue")
-            ),
+        Ok(_) => println!(
+            "{} {} {} {} {}",
+            colorize("Sent", "green"),
+            colorize("DNS", "yellow"),
+            colorize("query", "yellow"),
+            colorize("to", "green"),
+            colorize(&dst_ip.to_string(), "blue")
+        ),
         Err(err) => println!("Error sending packet: {:?}", err),
     }
 
@@ -104,10 +105,18 @@ fn build_dns_query(domain: &str, record_type: &str) -> Vec<u8> {
     for part in domain.split('.') {
         question.push(part.len() as u8);
         question.extend(part.as_bytes());
-        question.push(0); // End of domain name
+    }
+    question.push(0); // End of domain name
+
+    let mut record_type_num: u16 = 0x00ff; // Default value for "ANY"
+    match record_type {
+        "A" => record_type_num = 0x0001,
+        "MX" => record_type_num = 0x000f,
+        "NS" => record_type_num = 0x0002,
+        _ => (), // do nothing for unsupported record types
     }
 
-    question.extend(&*record_type.as_bytes()); // Record type (big-endian)
+    question.extend(&record_type_num.to_be_bytes()); // Record type (big-endian)
     question.extend(&0x0001u16.to_be_bytes()); // Record class (big-endian)
 
     // Combine header and question to form the complete DNS query
@@ -129,7 +138,7 @@ fn build_udp_packet(
 
     udp_packet.set_source(src_port);
     udp_packet.set_destination(dst_port);
-    udp_packet.set_payload(payload);
+    udp_packet.set_payload(&payload);
     udp_packet.set_length(8 + payload.len() as u16);
 
     let checksum =
@@ -154,7 +163,7 @@ fn build_ip_packet(source_ip: Ipv4Addr, dst_ip: Ipv4Addr, payload: &[u8]) -> Vec
     ipv4_packet.set_next_level_protocol(pnet::packet::ip::IpNextHeaderProtocols::Udp);
     ipv4_packet.set_source(source_ip);
     ipv4_packet.set_destination(dst_ip);
-    ipv4_packet.set_payload(payload);
+    ipv4_packet.set_payload(&payload);
 
     let checksum = pnet::packet::ipv4::checksum(&ipv4_packet.to_immutable());
     ipv4_packet.set_checksum(checksum);
