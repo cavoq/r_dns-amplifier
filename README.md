@@ -8,4 +8,4 @@ Performing DNS amplification attacks is illegal and can cause harm to innocent p
 
 ## Usage
 
-
+![Screenshot from 2023-04-08 14-14-40](https://user-images.githubusercontent.com/61215846/230720615-7ca0c1fd-c641-4129-a8c4-1af913edab3e.png)
