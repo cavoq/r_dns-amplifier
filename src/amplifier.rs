@@ -1,7 +1,7 @@
 // DNS Amplification Script
 // Author: David Stromberger
 // License: MIT
-// Version: 0.1.0
+// Version: 2.4.1
 // Disclaimer: This script is for educational purposes only. I am not responsible for any damage caused by this script.
 
 use std::fs::File;

@@ -28,7 +28,7 @@ to specify the full path:
 echo "alias sudo-rdns='sudo env \"PATH=$PATH\" r_dns-amplifier'" >> ~/.bashrc && source ~/.bashrc
 ```
 
-**Note that insteas of *r_dns-amplifier* you call *sudo-rdns***
+**Note: Instead of *r_dns-amplifier* you call *sudo-rdns***
 ## Usage
 
 Example usage with global install:
