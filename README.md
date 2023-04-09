@@ -1,7 +1,7 @@
 # r_dns-amplifier
 
 ![license](https://img.shields.io/badge/license-MIT-brightgreen.svg)
-![version](https://img.shields.io/badge/version-0.1.0-lightgrey.svg)
+![version](https://img.shields.io/badge/version-2.4.1-lightgrey.svg)
 
 `r_dns-amplifier` is a Rust script that performs DNS amplification attacks. It sends DNS queries to a target server with a spoofed source IP address, causing the target server to send a large amount of DNS response data to the spoofed IP address, thus amplifying the traffic. Please note that performing DNS amplification attacks is illegal and can cause harm to innocent parties. This code is provided for educational purposes only and should not be used for any malicious activities. The author of this code is not responsible for any harm caused by the misuse of this code.
 
