@@ -18,7 +18,7 @@ The script requires Rust to be installed.
 You can install the script globally using the cargo package manager by running:
 
 ```
-cargo install --git https://github.com/Dav3o/r_dns-amplifier.git --branch master
+cargo install --git https://github.com/cavoq/r_dns-amplifier.git --branch master
 ```
 
 Because this script uses raw sockets it requires root privileges, you need to set an alias and run the script like this if you don't want
