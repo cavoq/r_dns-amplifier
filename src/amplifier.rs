@@ -1,5 +1,5 @@
 // DNS Amplification Script
-// Author: David Stromberger
+// Author: Cavoq
 // License: MIT
 // Version: 2.4.1
 // Disclaimer: This script is for educational purposes only. I am not responsible for any damage caused by this script.
