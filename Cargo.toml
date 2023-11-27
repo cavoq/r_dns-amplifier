@@ -1,7 +1,7 @@
 [package]
 name = "r_dns-amplifier"
 version = "2.4.1"
-authors = ["David Stromberger <Davidstromberger99@gmx.de>"]
+authors = ["Cavoq <cavoq@proton.me>"]
 edition = "2021"
 
 [[bin]]
