@@ -49,7 +49,20 @@ cargo build --release
 
 *see help:*
 
-![Screenshot from 2023-04-08 17-18-15](https://user-images.githubusercontent.com/61215846/230729166-514eead7-081a-4b89-b79a-323e5af2a668.png)
+```
+Usage: r_dns-amplifier [OPTIONS] <TARGET> <PORT>
 
+Arguments:
+  <TARGET>  IP address of the target
+  <PORT>    Port of the target
 
-
+Options:
+  -r, --record-type <RECORD_TYPE>    Record type to use [default: ANY]
+  -s, --server-list <SERVER_LIST>    List of dns servers to use
+  -t, --time <TIME>                  Time the attack should run
+  -d, --domain <DOMAIN>              Domain to resolve [default: google.com]
+  -m, --threads <THREADS>            Thread count [default: 10]
+  -n, --dns-resolver <DNS_RESOLVER>  DNS resolver to use
+  -h, --help                         Print help
+  -V, --version                      Print version
+```
