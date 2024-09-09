@@ -7,7 +7,7 @@
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Error, ErrorKind};
 use std::mem::size_of;
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -65,6 +65,16 @@ fn read_public_dns_servers(file: &str) -> io::Result<Vec<String>> {
     }
 
     Ok(dns_servers)
+}
+
+fn filter_ipv4_addresses(servers: Vec<String>) -> Vec<String> {
+    servers
+        .into_iter()
+        .filter_map(|s| match s.parse::<IpAddr>() {
+            Ok(IpAddr::V4(_)) => Some(s),
+            _ => None,
+        })
+        .collect()
 }
 
 fn send_dns_query(
@@ -303,7 +313,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let time = args.time;
     let domain = args.domain.unwrap();
     let threads = args.threads.unwrap();
-    let dns_servers: Vec<String>;
+    let mut dns_servers: Vec<String>;
 
     if args.server_list.is_none() && args.dns_resolver.is_none() {
         dns_servers = get_public_dns_servers("https://public-dns.info/nameservers.txt").await?;
@@ -312,6 +322,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         dns_servers = read_public_dns_servers(args.server_list.as_ref().unwrap()).unwrap();
     }
+    dns_servers = filter_ipv4_addresses(dns_servers);
 
     let aborted = Arc::new(AtomicBool::new(false));
     let mut handles = vec![];
