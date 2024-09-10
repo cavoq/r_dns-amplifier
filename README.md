@@ -3,15 +3,18 @@
 ![license](https://img.shields.io/badge/license-MIT-brightgreen.svg)
 ![version](https://img.shields.io/badge/version-2.4.1-lightgrey.svg)
 
-`r_dns-amplifier` is a Rust script that performs DNS amplification attacks. It sends DNS queries to a target server with a spoofed source IP address, causing the target server to send a large amount of DNS response data to the spoofed IP address, thus amplifying the traffic. Please note that performing DNS amplification attacks is illegal and can cause harm to innocent parties. This code is provided for educational purposes only and should not be used for any malicious activities. The author of this code is not responsible for any harm caused by the misuse of this code.
+`r_dns-amplifier` is a Rust tool for educational purposes to demonstrate DNS amplification attacks. It sends spoofed DNS queries to a target server, which then responds with a large volume of data to the specified address, amplifying the traffic.
 
-## Disclaimer
-
-Performing DNS amplification attacks is illegal and can cause harm to innocent parties. This code is provided for educational purposes only and should not be used for any malicious activities. The author of this code is not responsible for any harm caused by the misuse of this code.
+**DISCLAIMER:** DNS amplification attacks are illegal and unethical. Use this tool responsibly and only for educational purposes. The author disclaims all responsibility for misuse.
 
 ## Requirements
 
-The script requires Rust to be installed.
+- Rust (tested with version 1.81.0)
+- Additional libraries: `pkg-config`, `libssl-dev`
+
+## Install
+
+Install globally via Cargo:
 
 ## Install
 
@@ -39,7 +42,7 @@ echo "alias sudo-rdns='sudo env \"PATH=$PATH\" r_dns-amplifier'" >> ~/.bashrc &&
 
 Example usage with global install:
 ```
-sudo-rdns 192.168.2.1 80 -r ANY -d google.com
+sudo-rdns 192.168.2.1 --port 53 -r ANY -d google.com
 ```
 
 You can also run this script by building it directly after cloning:
@@ -50,19 +53,28 @@ cargo build --release
 *see help:*
 
 ```
-Usage: r_dns-amplifier [OPTIONS] <TARGET> <PORT>
+Usage: r_dns-amplifier [OPTIONS] <TARGET>
 
 Arguments:
-  <TARGET>  IP address of the target
-  <PORT>    Port of the target
+  <TARGET>  IPv4 address of the target
 
 Options:
-  -r, --record-type <RECORD_TYPE>    Record type to use [default: ANY]
-  -s, --server-list <SERVER_LIST>    List of dns servers to use
-  -t, --time <TIME>                  Time the attack should run
+  -p, --port <PORT>                  Port of the target [default: 53]
+  -r, --record-type <RECORD_TYPE>    DNS record type to use [A, MX, NS, ANY] [default: ANY]
+  -s, --server-list <SERVER_LIST>    List of DNS servers to use
+  -t, --time <TIME>                  Time of the attack in seconds
   -d, --domain <DOMAIN>              Domain to resolve [default: google.com]
   -m, --threads <THREADS>            Thread count [default: 10]
   -n, --dns-resolver <DNS_RESOLVER>  DNS resolver to use
   -h, --help                         Print help
   -V, --version                      Print version
+```
+
+## Docker
+
+You can also run this script in a Docker container, the `--privileged` flag is required to use raw sockets in the container.
+
+```
+docker build -t r_dns-amplifier .
+docker run --rm --privileged r_dns-amplifier 192.168.2.1 --port 53 -r ANY -d google.com
 ```

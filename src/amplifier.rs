@@ -287,13 +287,13 @@ async fn status_update_task(
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// IP address of the target
+    /// IPv4 address of the target
     #[arg(required = true)]
     target: String,
     /// Port of the target
-    #[arg(required = true)]
+    #[arg(short = 'p', long = "port", required = false, default_value = "53")]
     port: u16,
-    /// Record type to use
+    /// DNS record type to use [A, MX, NS, ANY]
     #[arg(
         short = 'r',
         long = "record-type",
@@ -301,10 +301,10 @@ struct Args {
         default_value = "ANY"
     )]
     record_type: Option<String>,
-    /// List of dns servers to use
+    /// List of DNS servers to use
     #[arg(short, long, required = false)]
     server_list: Option<String>,
-    /// Time the attack should run
+    /// Time of the attack in seconds
     #[arg(short, long, required = false)]
     time: Option<u64>,
     /// Domain to resolve
