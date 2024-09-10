@@ -9,7 +9,7 @@ name = "r_dns-amplifier"
 path = "src/amplifier.rs"
 
 [dependencies]
-reqwest = { version = "0.12.7", features = ["blocking"] }
+reqwest = { version = "0.12.7", features = ["json"] }
 tokio = { version = "1.40.0", features = ["full"] }
 clap = { version = "4.5.17", features = ["derive"] }
 rand = "0.8.5"

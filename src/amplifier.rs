@@ -1,9 +1,3 @@
-// DNS Amplification Script
-// Author: Cavoq
-// License: MIT
-// Version: 2.4.1
-// Disclaimer: This script is for educational purposes only. I am not responsible for any damage caused by this script.
-
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Error, ErrorKind};
 use std::mem;
@@ -269,7 +263,9 @@ async fn amplify(
     Ok(())
 }
 
-async fn status_update_task(aborted: Arc<AtomicBool>) {
+async fn status_update_task(
+    aborted: Arc<AtomicBool>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut interval = tokio::time::interval(Duration::from_secs(2));
 
     loop {
@@ -284,6 +280,8 @@ async fn status_update_task(aborted: Arc<AtomicBool>) {
             colorize(&count.to_string(), "red")
         );
     }
+
+    Ok(())
 }
 
 #[derive(Parser, Debug)]
@@ -425,7 +423,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    status_task.abort();
     if let Err(e) = status_task.await {
         eprintln!("Status update task encountered an error: {:?}", e);
     }
