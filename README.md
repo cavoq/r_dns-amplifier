@@ -1,7 +1,7 @@
 # r_dns-amplifier
 
 ![license](https://img.shields.io/badge/license-MIT-brightgreen.svg)
-![version](https://img.shields.io/badge/version-2.4.1-lightgrey.svg)
+![version](https://img.shields.io/badge/version-2.6.0-lightgrey.svg)
 
 `r_dns-amplifier` is a Rust tool for educational purposes to demonstrate DNS amplification attacks. It sends spoofed DNS queries to a target server, which then responds with a large volume of data to the specified address, amplifying the traffic.
 

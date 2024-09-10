@@ -868,7 +868,7 @@ dependencies = [
 
 [[package]]
 name = "r_dns-amplifier"
-version = "2.4.1"
+version = "2.6.0"
 dependencies = [
  "clap",
  "libc",
