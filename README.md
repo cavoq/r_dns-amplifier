@@ -14,10 +14,6 @@
 
 ## Install
 
-Install globally via Cargo:
-
-## Install
-
 You can install the script globally using the cargo package manager by running:
 
 ```
