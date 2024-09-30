@@ -2,7 +2,11 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader, Error, ErrorKind};
 use std::mem;
 use std::mem::size_of;
+<<<<<<< HEAD
 use std::net::{IpAddr, Ipv4Addr};
+=======
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+>>>>>>> a5eef19 (PacketBuilder traits)
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -131,91 +135,127 @@ fn build_dns_query(domain: &str, record_type: &str) -> Vec<u8> {
     dns_query_buffer
 }
 
-fn build_udp_packet(
-    src_port: u16,
-    dst_port: u16,
-    source_ip: Ipv4Addr,
-    dst_ip: Ipv4Addr,
-    payload: &[u8],
-) -> Vec<u8> {
-    let mut udp_packet = MutableUdpPacket::owned(vec![0u8; 8 + payload.len()]).unwrap();
-
-    udp_packet.set_source(src_port);
-    udp_packet.set_destination(dst_port);
-    udp_packet.set_payload(&payload);
-    udp_packet.set_length(8 + payload.len() as u16);
-
-    let checksum =
-        pnet::packet::udp::ipv4_checksum(&udp_packet.to_immutable(), &source_ip, &dst_ip);
-    udp_packet.set_checksum(checksum);
-
-    udp_packet.to_immutable().packet().to_vec()
+trait PacketBuilder<IpAddr> {
+    fn build_udp_packet(
+        &self,
+        src_port: u16,
+        dst_ip: IpAddr,
+        dst_port: u16,
+        payload: &[u8],
+    ) -> Vec<u8>;
+    fn build_ip_packet(&self, dst_ip: IpAddr, payload: &[u8]) -> Vec<u8>;
+    fn send_raw_packet(&self, packet: &[u8]) -> Result<(), Error>;
+    fn send_dns_query(
+        &self,
+        dst_ip: IpAddr,
+        domain: &str,
+        source_port: u16,
+        record_type: &str,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
 }
 
-fn build_ip_packet(source_ip: Ipv4Addr, dst_ip: Ipv4Addr, payload: &[u8]) -> Vec<u8> {
-    let mut ipv4_packet = MutableIpv4Packet::owned(vec![0u8; 20 + payload.len()]).unwrap();
+impl PacketBuilder<Ipv4Addr> for Ipv4Addr {
+    fn build_udp_packet(
+        &self,
+        src_port: u16,
+        dst_ip: Ipv4Addr,
+        dst_port: u16,
+        payload: &[u8],
+    ) -> Vec<u8> {
+        let mut udp_packet = MutableUdpPacket::owned(vec![0u8; 8 + payload.len()]).unwrap();
 
-    ipv4_packet.set_version(4);
-    ipv4_packet.set_header_length(5);
-    ipv4_packet.set_total_length(20 + payload.len() as u16);
-    ipv4_packet.set_dscp(0);
-    ipv4_packet.set_ecn(0);
-    ipv4_packet.set_identification(0x1234);
-    ipv4_packet.set_flags(0);
-    ipv4_packet.set_fragment_offset(0);
-    ipv4_packet.set_ttl(64);
-    ipv4_packet.set_next_level_protocol(pnet::packet::ip::IpNextHeaderProtocols::Udp);
-    ipv4_packet.set_source(source_ip);
-    ipv4_packet.set_destination(dst_ip);
-    ipv4_packet.set_payload(&payload);
+        udp_packet.set_source(src_port);
+        udp_packet.set_destination(dst_port);
+        udp_packet.set_payload(&payload);
+        udp_packet.set_length(8 + payload.len() as u16);
 
-    let checksum = pnet::packet::ipv4::checksum(&ipv4_packet.to_immutable());
-    ipv4_packet.set_checksum(checksum);
+        let checksum = pnet::packet::udp::ipv4_checksum(&udp_packet.to_immutable(), &self, &dst_ip);
+        udp_packet.set_checksum(checksum);
 
-    ipv4_packet.to_immutable().packet().to_vec()
-}
+        udp_packet.to_immutable().packet().to_vec()
+    }
 
-fn send_raw_packet(dst_ip: Ipv4Addr, packet: &[u8]) -> Result<(), Error> {
-    let sock = match unsafe { libc::socket(AF_INET, SOCK_RAW, IPPROTO_RAW) } {
-        -1 => {
+    fn build_ip_packet(&self, dst_ip: Ipv4Addr, payload: &[u8]) -> Vec<u8> {
+        let mut ipv4_packet = MutableIpv4Packet::owned(vec![0u8; 20 + payload.len()]).unwrap();
+
+        ipv4_packet.set_version(4);
+        ipv4_packet.set_header_length(5);
+        ipv4_packet.set_total_length(20 + payload.len() as u16);
+        ipv4_packet.set_dscp(0);
+        ipv4_packet.set_ecn(0);
+        ipv4_packet.set_identification(0x1234);
+        ipv4_packet.set_flags(0);
+        ipv4_packet.set_fragment_offset(0);
+        ipv4_packet.set_ttl(64);
+        ipv4_packet.set_next_level_protocol(pnet::packet::ip::IpNextHeaderProtocols::Udp);
+        ipv4_packet.set_source(*self);
+        ipv4_packet.set_destination(dst_ip);
+        ipv4_packet.set_payload(&payload);
+
+        let checksum = pnet::packet::ipv4::checksum(&ipv4_packet.to_immutable());
+        ipv4_packet.set_checksum(checksum);
+
+        ipv4_packet.to_immutable().packet().to_vec()
+    }
+
+    fn send_dns_query(
+        &self,
+        dst_ip: Ipv4Addr,
+        domain: &str,
+        source_port: u16,
+        record_type: &str,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let dns_query_payload = build_dns_query(domain, record_type);
+        let udp_payload = self.build_udp_packet(source_port, dst_ip, 53, &dns_query_payload);
+        let ip_payload = self.build_ip_packet(dst_ip, &udp_payload);
+
+        dst_ip.send_raw_packet(&ip_payload)?;
+
+        Ok(())
+    }
+
+    fn send_raw_packet(&self, packet: &[u8]) -> Result<(), Error> {
+        let sock = match unsafe { libc::socket(AF_INET, SOCK_RAW, IPPROTO_RAW) } {
+            -1 => {
+                return Err(Error::last_os_error());
+            }
+            fd => fd,
+        };
+
+        let sockaddr = sockaddr_in {
+            sin_family: AF_INET as u16,
+            sin_port: 0,
+            sin_addr: libc::in_addr {
+                s_addr: u32::from(*self).to_be(),
+            },
+            ..unsafe { mem::zeroed() }
+        };
+        let sockaddr_ptr = &sockaddr as *const _ as *const sockaddr;
+
+        let send_bytes = unsafe {
+            sendto(
+                sock,
+                packet.as_ptr() as *const libc::c_void,
+                packet.len(),
+                0,
+                sockaddr_ptr,
+                size_of::<sockaddr_in>() as libc::socklen_t,
+            )
+        };
+
+        if send_bytes != packet.len() as isize {
+            let err = Error::new(ErrorKind::Other, "Failed to send packet");
+            unsafe { libc::close(sock) };
+            return Err(err);
+        }
+
+        let res = unsafe { libc::close(sock) };
+        if res == -1 {
             return Err(Error::last_os_error());
         }
-        fd => fd,
-    };
 
-    let sockaddr = sockaddr_in {
-        sin_family: AF_INET as u16,
-        sin_port: 0,
-        sin_addr: libc::in_addr {
-            s_addr: u32::from(dst_ip).to_be(),
-        },
-        ..unsafe { mem::zeroed() }
-    };
-    let sockaddr_ptr = &sockaddr as *const _ as *const sockaddr;
-
-    let send_bytes = unsafe {
-        sendto(
-            sock,
-            packet.as_ptr() as *const libc::c_void,
-            packet.len(),
-            0,
-            sockaddr_ptr,
-            size_of::<sockaddr_in>() as libc::socklen_t,
-        )
-    };
-
-    if send_bytes != packet.len() as isize {
-        let err = Error::new(ErrorKind::Other, "Failed to send packet");
-        unsafe { libc::close(sock) };
-        return Err(err);
+        Ok(())
     }
-
-    let res = unsafe { libc::close(sock) };
-    if res == -1 {
-        return Err(Error::last_os_error());
-    }
-
-    Ok(())
 }
 
 async fn amplify(
