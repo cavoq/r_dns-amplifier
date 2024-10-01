@@ -63,18 +63,14 @@ fn read_dns_servers(file: &str) -> io::Result<Vec<String>> {
     Ok(dns_servers)
 }
 
-fn filter_dns_servers(servers: Vec<String>, ip_type: IpAddr) -> io::Result<Vec<String>> {
-    let filtered_servers: Vec<String> = servers
+fn filter_dns_servers(servers: Vec<String>, source_ip: IpAddr) -> Result<Vec<IpAddr>, Error> {
+    let filtered_servers = servers
         .into_iter()
-        .filter(|server| {
-            if let Ok(ip) = IpAddr::from_str(server) {
-                match ip_type {
-                    IpAddr::V4(_) => matches!(ip, IpAddr::V4(_)),
-                    IpAddr::V6(_) => matches!(ip, IpAddr::V6(_)),
-                }
-            } else {
-                false
-            }
+        .filter_map(|server| IpAddr::from_str(&server).ok())
+        .filter(|ip| match (source_ip, ip) {
+            (IpAddr::V4(_), IpAddr::V4(_)) => true,
+            (IpAddr::V6(_), IpAddr::V6(_)) => true,
+            _ => false,
         })
         .collect();
     Ok(filtered_servers)
@@ -499,38 +495,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let domain = args.domain.unwrap();
     let threads = args.threads.unwrap();
 
-    let dns_servers: Vec<String>;
-    if args.server_list.is_none() && args.dns_resolver.is_none() {
-        dns_servers = match get_dns_servers("https://public-dns.info/nameservers.txt").await {
-            Ok(servers) => servers,
-            Err(e) => {
-                eprintln!(
-                    "[{}] Failed to get DNS servers: {}",
-                    colorize("ERROR", "red"),
-                    e
-                );
-                std::process::exit(1);
-            }
-        };
-    } else if args.dns_resolver.is_some() {
-        dns_servers = args.dns_resolver.map(|s| vec![s]).unwrap_or(vec![]);
+    let dns_servers: Vec<IpAddr> = if let Some(dns_resolver) = args.dns_resolver {
+        vec![IpAddr::from_str(&dns_resolver)?]
+    } else if let Some(server_list) = args.server_list {
+        let servers = read_dns_servers(&server_list)?;
+        filter_dns_servers(servers, source_ip)?
     } else {
-        dns_servers = read_dns_servers(args.server_list.as_ref().unwrap()).unwrap();
-    }
-    let dns_servers: Vec<IpAddr> = match filter_dns_servers(dns_servers.clone(), source_ip.clone())
-    {
-        Ok(servers) => servers
-            .into_iter()
-            .filter_map(|server| IpAddr::from_str(&server).ok())
-            .collect(),
-        Err(e) => {
-            eprintln!(
-                "[{}] Failed to filter DNS servers: {}",
-                colorize("ERROR", "red"),
-                e
-            );
-            std::process::exit(1);
-        }
+        let servers = get_dns_servers("https://public-dns.info/nameservers.txt").await?;
+        filter_dns_servers(servers, source_ip)?
     };
 
     let aborted = Arc::new(AtomicBool::new(false));
