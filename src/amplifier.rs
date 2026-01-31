@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use clap::{arg, command, Parser};
+use clap::Parser;
 
 use pnet::packet::ipv4::MutableIpv4Packet;
 use pnet::packet::ipv6::MutableIpv6Packet;

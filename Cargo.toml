@@ -1,6 +1,6 @@
 [package]
 name = "r_dns-amplifier"
-version = "2.6.0"
+version = "2.6.1"
 authors = ["David Stromberger <cavoq@proton.me>"]
 edition = "2021"
 
@@ -9,9 +9,9 @@ name = "r_dns-amplifier"
 path = "src/amplifier.rs"
 
 [dependencies]
-reqwest = { version = "0.12.7", features = ["json"] }
-tokio = { version = "1.40.0", features = ["full"] }
-clap = { version = "4.5.17", features = ["derive"] }
+reqwest = { version = "0.12.9", features = ["json"] }
+tokio = { version = "1.42.0", features = ["full"] }
+clap = { version = "4.5.20", features = ["derive"] }
 rand = "0.8.5"
 pnet = "0.35.0"
-libc = "0.2.158"
+libc = "0.2.167"
