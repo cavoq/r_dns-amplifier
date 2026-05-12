@@ -39,9 +39,16 @@ fn colorize(text: &str, color: &str) -> String {
 }
 
 async fn get_dns_servers(url: &str) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-    let client = reqwest::Client::new();
-    let response = client.get(url).send().await?.text().await?;
-    let servers = response.lines().map(|s| s.trim().to_string()).collect();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()?;
+    let response = client.get(url).send().await?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("HTTP request failed with status: {}", status).into());
+    }
+    let text = response.text().await?;
+    let servers = text.lines().map(|s| s.trim().to_string()).collect();
     Ok(servers)
 }
 
@@ -74,6 +81,29 @@ fn filter_dns_servers(servers: Vec<String>, source_ip: IpAddr) -> Result<Vec<IpA
         })
         .collect();
     Ok(filtered_servers)
+}
+
+fn validate_domain(domain: &str) -> Result<(), Box<dyn std::error::Error>> {
+    if domain.is_empty() {
+        return Err("Domain name cannot be empty".into());
+    }
+    if domain.len() > 253 {
+        return Err("Domain name too long (max 253 characters)".into());
+    }
+    if !domain.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-') {
+        return Err("Domain name contains invalid characters".into());
+    }
+    if domain.starts_with('.') || domain.ends_with('.') {
+        return Err("Domain name cannot start or end with a dot".into());
+    }
+    Ok(())
+}
+
+fn validate_record_type(record_type: &str) -> Result<(), Box<dyn std::error::Error>> {
+    match record_type {
+        "A" | "MX" | "NS" | "ANY" => Ok(()),
+        _ => Err(format!("Unsupported record type: {}. Supported types: A, MX, NS, ANY", record_type).into()),
+    }
 }
 
 fn build_dns_query(domain: &str, record_type: &str) -> Vec<u8> {
@@ -123,8 +153,8 @@ trait PacketBuilder<IpAddr> {
         dst_ip: &IpAddr,
         dst_port: u16,
         payload: &[u8],
-    ) -> Vec<u8>;
-    fn build_ip_packet(&self, dst_ip: &IpAddr, payload: &[u8]) -> Vec<u8>;
+    ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>>;
+    fn build_ip_packet(&self, dst_ip: &IpAddr, payload: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>>;
     fn send_raw_packet(&self, packet: &[u8]) -> Result<(), Error>;
     fn send_dns_query(
         &self,
@@ -142,8 +172,9 @@ impl PacketBuilder<Ipv4Addr> for Ipv4Addr {
         dst_ip: &Ipv4Addr,
         dst_port: u16,
         payload: &[u8],
-    ) -> Vec<u8> {
-        let mut udp_packet = MutableUdpPacket::owned(vec![0u8; 8 + payload.len()]).unwrap();
+    ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+        let mut udp_packet = MutableUdpPacket::owned(vec![0u8; 8 + payload.len()])
+            .ok_or_else(|| "Failed to create UDP packet: insufficient buffer size")?;
 
         udp_packet.set_source(src_port);
         udp_packet.set_destination(dst_port);
@@ -153,11 +184,12 @@ impl PacketBuilder<Ipv4Addr> for Ipv4Addr {
         let checksum = pnet::packet::udp::ipv4_checksum(&udp_packet.to_immutable(), &self, &dst_ip);
         udp_packet.set_checksum(checksum);
 
-        udp_packet.to_immutable().packet().to_vec()
+        Ok(udp_packet.to_immutable().packet().to_vec())
     }
 
-    fn build_ip_packet(&self, dst_ip: &Ipv4Addr, payload: &[u8]) -> Vec<u8> {
-        let mut ipv4_packet = MutableIpv4Packet::owned(vec![0u8; 20 + payload.len()]).unwrap();
+    fn build_ip_packet(&self, dst_ip: &Ipv4Addr, payload: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+        let mut ipv4_packet = MutableIpv4Packet::owned(vec![0u8; 20 + payload.len()])
+            .ok_or_else(|| "Failed to create IPv4 packet: insufficient buffer size")?;
 
         ipv4_packet.set_version(4);
         ipv4_packet.set_header_length(5);
@@ -176,7 +208,7 @@ impl PacketBuilder<Ipv4Addr> for Ipv4Addr {
         let checksum = pnet::packet::ipv4::checksum(&ipv4_packet.to_immutable());
         ipv4_packet.set_checksum(checksum);
 
-        ipv4_packet.to_immutable().packet().to_vec()
+        Ok(ipv4_packet.to_immutable().packet().to_vec())
     }
 
     fn send_dns_query(
@@ -187,8 +219,8 @@ impl PacketBuilder<Ipv4Addr> for Ipv4Addr {
         record_type: &str,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let dns_query_payload = build_dns_query(domain, record_type);
-        let udp_payload = self.build_udp_packet(source_port, dst_ip, 53, &dns_query_payload);
-        let ip_payload = self.build_ip_packet(dst_ip, &udp_payload);
+        let udp_payload = self.build_udp_packet(source_port, dst_ip, 53, &dns_query_payload)?;
+        let ip_payload = self.build_ip_packet(dst_ip, &udp_payload)?;
 
         match dst_ip.send_raw_packet(&ip_payload) {
             Ok(_) => {
@@ -250,8 +282,9 @@ impl PacketBuilder<Ipv6Addr> for Ipv6Addr {
         dst_ip: &Ipv6Addr,
         dst_port: u16,
         payload: &[u8],
-    ) -> Vec<u8> {
-        let mut udp_packet = MutableUdpPacket::owned(vec![0u8; 8 + payload.len()]).unwrap();
+    ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+        let mut udp_packet = MutableUdpPacket::owned(vec![0u8; 8 + payload.len()])
+            .ok_or_else(|| "Failed to create UDP packet: insufficient buffer size")?;
 
         udp_packet.set_source(src_port);
         udp_packet.set_destination(dst_port);
@@ -268,11 +301,12 @@ impl PacketBuilder<Ipv6Addr> for Ipv6Addr {
         );
         udp_packet.set_checksum(checksum);
 
-        udp_packet.to_immutable().packet().to_vec()
+        Ok(udp_packet.to_immutable().packet().to_vec())
     }
 
-    fn build_ip_packet(&self, dst_ip: &Ipv6Addr, payload: &[u8]) -> Vec<u8> {
-        let mut ipv6_packet = MutableIpv6Packet::owned(vec![0u8; 40 + payload.len()]).unwrap();
+    fn build_ip_packet(&self, dst_ip: &Ipv6Addr, payload: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+        let mut ipv6_packet = MutableIpv6Packet::owned(vec![0u8; 40 + payload.len()])
+            .ok_or_else(|| "Failed to create IPv6 packet: insufficient buffer size")?;
 
         ipv6_packet.set_version(6);
         ipv6_packet.set_traffic_class(0xFF);
@@ -283,7 +317,7 @@ impl PacketBuilder<Ipv6Addr> for Ipv6Addr {
         ipv6_packet.set_source(*self);
         ipv6_packet.set_destination(*dst_ip);
         ipv6_packet.set_payload(payload);
-        ipv6_packet.to_immutable().packet().to_vec()
+        Ok(ipv6_packet.to_immutable().packet().to_vec())
     }
 
     fn send_dns_query(
@@ -294,8 +328,8 @@ impl PacketBuilder<Ipv6Addr> for Ipv6Addr {
         record_type: &str,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let dns_query_payload = build_dns_query(domain, record_type);
-        let udp_payload = self.build_udp_packet(source_port, dst_ip, 53, &dns_query_payload);
-        let ip_payload = self.build_ip_packet(dst_ip, &udp_payload);
+        let udp_payload = self.build_udp_packet(source_port, dst_ip, 53, &dns_query_payload)?;
+        let ip_payload = self.build_ip_packet(dst_ip, &udp_payload)?;
 
         match dst_ip.send_raw_packet(&ip_payload) {
             Ok(_) => {
@@ -475,35 +509,46 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let args = Args::parse();
-    let record_type = args.record_type.unwrap();
+    let record_type = args.record_type.unwrap_or_else(|| "ANY".to_string());
 
-    let source_ip = args.target;
-    let source_ip = match IpAddr::from_str(&source_ip) {
-        Ok(ip) => ip,
-        Err(_) => {
-            eprintln!(
-                "[{}] Invalid target IP address {}",
-                colorize("ERROR", "red"),
-                colorize(&source_ip, "magenta")
-            );
-            std::process::exit(1);
-        }
-    };
+    // Validate inputs
+    validate_record_type(&record_type)?;
+    validate_domain(&args.domain.clone().unwrap_or_else(|| "google.com".to_string()))?;
+
+    let source_ip_str = args.target;
+    let source_ip = IpAddr::from_str(&source_ip_str).map_err(|e| {
+        format!("Invalid target IP address '{}': {}", source_ip_str, e)
+    })?;
 
     let source_port = args.port;
+    if source_port == 0 {
+        return Err("Source port cannot be 0".into());
+    }
+
     let time = args.time;
-    let domain = args.domain.unwrap();
-    let threads = args.threads.unwrap();
+    let domain = args.domain.unwrap_or_else(|| "google.com".to_string());
+    let threads = args.threads.unwrap_or(10);
+
+    if threads == 0 {
+        return Err("Thread count must be greater than 0".into());
+    }
 
     let dns_servers: Vec<IpAddr> = if let Some(dns_resolver) = args.dns_resolver {
-        vec![IpAddr::from_str(&dns_resolver)?]
+        vec![IpAddr::from_str(&dns_resolver).map_err(|e| {
+            format!("Invalid DNS resolver IP '{}': {}", dns_resolver, e)
+        })?]
     } else if let Some(server_list) = args.server_list {
         let servers = read_dns_servers(&server_list)?;
         filter_dns_servers(servers, source_ip)?
     } else {
-        let servers = get_dns_servers("https://public-dns.info/nameservers.txt").await?;
+        let servers = get_dns_servers("https://public-dns.info/nameservers.txt").await
+            .map_err(|e| format!("Failed to fetch DNS servers: {}", e))?;
         filter_dns_servers(servers, source_ip)?
     };
+
+    if dns_servers.is_empty() {
+        return Err("No valid DNS servers found for the specified IP version".into());
+    }
 
     let aborted = Arc::new(AtomicBool::new(false));
     let start_time = Instant::now();
@@ -548,7 +593,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let aborted_clone = Arc::clone(&aborted);
     let signal_task = tokio::spawn(async move {
-        signal::ctrl_c().await.expect("Failed to listen for ctrl-c");
+        if let Err(e) = signal::ctrl_c().await {
+            eprintln!(
+                "[{}] Failed to listen for ctrl-c: {}",
+                colorize("ERROR", "red"),
+                e
+            );
+        }
         aborted_clone.store(true, Ordering::Relaxed);
     });
 
